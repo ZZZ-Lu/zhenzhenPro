@@ -1,0 +1,452 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Lora", "Playfair Display", Georgia, Cambria, "Times New Roman", Times, serif;
+}
+
+/* Global shadow, border & outline removal */
+*, ::before, ::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  --tw-shadow: none !important;
+  --tw-shadow-colored: none !important;
+  border: none !important;
+  border-width: 0px !important;
+  border-color: transparent !important;
+  outline: none !important;
+}
+
+/* Custom scrollbar tweaks - Hide all scrollbars globally */
+::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+* {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+/* Tracks centering is handled inside the App.tsx flex layout */
+
+/* ========================================== */
+/*           LIGHT MODE PALETTE OVERRIDES      */
+/* ========================================== */
+#app_container.light {
+  background-color: #f1f5f9 !important; /* bg-slate-50 */
+  color: #0f172a !important; /* text-slate-900 */
+}
+
+/* Adaptive header block */
+#app_container.light header {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-bottom-color: #e2e8f0 !important;
+  box-shadow: none !important;
+}
+
+#app_container.light header h1, 
+#app_container.light header h2, 
+#app_container.light header h3,
+#app_container.light header p {
+  color: #0f172a !important;
+}
+
+#app_container.light header p {
+  color: #64748b !important;
+}
+
+/* Background overrides */
+#app_container.light .bg-slate-950,
+#app_container.light .bg-slate-950\/60,
+#app_container.light .bg-slate-950\/80 {
+  background-color: #f1f5f9 !important;
+}
+
+#app_container.light .bg-slate-950\/60,
+#app_container.light .bg-slate-950\/80 {
+  background-color: rgba(241, 245, 249, 0.8) !important;
+}
+
+#app_container.light .bg-slate-900 {
+  background-color: #ffffff !important;
+}
+
+#app_container.light .bg-slate-900\/10 {
+  background-color: rgba(226, 232, 240, 0.3) !important;
+}
+
+#app_container.light .bg-slate-850 {
+  background-color: #e2e8f0 !important;
+}
+
+/* Border overrides */
+#app_container.light .border-slate-800,
+#app_container.light .border-slate-850,
+#app_container.light .border-slate-850\/80,
+#app_container.light .border-slate-800\/80,
+#app_container.light .border-slate-700 {
+  border-color: #e2e8f0 !important;
+}
+
+/* Text overrides */
+#app_container.light .text-slate-100 {
+  color: #0f172a !important;
+}
+
+#app_container.light .text-slate-205,
+#app_container.light .text-slate-200 {
+  color: #1e293b !important;
+}
+
+#app_container.light .text-slate-300 {
+  color: #334155 !important;
+}
+
+#app_container.light .text-slate-350 {
+  color: #334155 !important;
+}
+
+#app_container.light .text-slate-400 {
+  color: #334155 !important;
+}
+
+#app_container.light .text-slate-500 {
+  color: #475569 !important;
+}
+
+#app_container.light .text-slate-600 {
+  color: #475569 !important;
+}
+
+#app_container.light .text-slate-650 {
+  color: #64748b !important;
+}
+
+/* Emerald and Success accent colors adaptation in light theme */
+#app_container.light .text-emerald-400,
+#app_container.light .hover\:text-emerald-400:hover {
+  color: #15803d !important; /* emerald-700 */
+}
+
+#app_container.light .text-emerald-500,
+#app_container.light .text-emerald-555,
+#app_container.light .text-emerald-500\/95,
+#app_container.light .text-emerald-500\/90,
+#app_container.light .text-emerald-500\/80 {
+  color: #166534 !important; /* emerald-800 */
+}
+
+#app_container.light .bg-emerald-500\/10 {
+  background-color: rgba(22, 101, 52, 0.1) !important;
+}
+
+#app_container.light .border-emerald-500\/10 {
+  border-color: rgba(22, 101, 52, 0.2) !important;
+}
+
+/* Ensure white text is turned dark except inside designated elements */
+#app_container.light .text-white:not(.bg-indigo-600 *, .bg-emerald-600 *, .bg-amber-600 *, .bg-red-600 *, .bg-slate-900 *, button *) {
+  color: #0f172a !important;
+}
+
+#app_container.light h1.text-white,
+#app_container.light h2.text-white,
+#app_container.light h3.text-white {
+  color: #0f172a !important;
+}
+
+/* Buttons adapt to light theme */
+#app_container.light .bg-slate-800 {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+#app_container.light .bg-slate-800:hover {
+  background-color: #e2e8f0 !important;
+}
+
+#app_container.light .text-indigo-305 {
+  color: #ffffff !important;
+}
+
+#app_container.light .text-indigo-300 {
+  color: #4f46e5 !important;
+}
+
+#app_container.light .text-indigo-400 {
+  color: #4338ca !important;
+}
+
+/* Secondary cards in track and diagnostic views */
+#app_container.light .bg-slate-900.border-slate-800 {
+  background-color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+/* Textareas and inputs adaptation */
+#app_container.light textarea,
+#app_container.light select,
+#app_container.light input {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+#app_container.light select option {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+#app_container.light textarea:focus,
+#app_container.light select:focus,
+#app_container.light input:focus {
+  border-color: #4f46e5 !important;
+  --tw-ring-color: rgba(79, 70, 229, 0.1) !important;
+}
+
+#app_container.light ::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Track timeline cards background hover state */
+#app_container.light .hover\:bg-slate-800:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Scrollbars in light mode - Hidden */
+#app_container.light ::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Quick tag/badge fixes */
+#app_container.light .bg-slate-850.text-indigo-300 {
+  background-color: rgba(79, 70, 229, 0.08) !important;
+  color: #4f46e5 !important;
+  border-color: rgba(79, 70, 229, 0.2) !important;
+}
+
+#app_container.light .bg-slate-950\/80 {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* ========================================== */
+/*           DARK MODE ABSOLUTE BLACK OVERRIDES */
+/* ========================================== */
+#app_container:not(.light) {
+  background-color: #121214 !important;
+  color: #e2e2e6 !important; /* text-zinc-200 */
+}
+
+/* Base backgrounds mapped to beautiful desaturated soft charcoal elements */
+#app_container:not(.light) .bg-slate-950 {
+  background-color: #121214 !important;
+}
+
+#app_container:not(.light) .bg-slate-950\/25 {
+  background-color: rgba(18, 18, 20, 0.25) !important;
+}
+
+#app_container:not(.light) .bg-slate-950\/60 {
+  background-color: rgba(18, 18, 20, 0.6) !important;
+}
+
+#app_container:not(.light) .bg-slate-950\/80 {
+  background-color: rgba(18, 18, 20, 0.8) !important;
+}
+
+#app_container:not(.light) .bg-slate-900 {
+  background-color: #1c1c1f !important; /* Raised matte charcoal base */
+}
+
+#app_container:not(.light) .bg-slate-900\/90 {
+  background-color: rgba(28, 28, 31, 0.9) !important;
+}
+
+#app_container:not(.light) .bg-slate-900\/10 {
+  background-color: rgba(28, 28, 31, 0.1) !important;
+}
+
+#app_container:not(.light) .bg-slate-900\/40 {
+  background-color: rgba(28, 28, 31, 0.4) !important;
+}
+
+#app_container:not(.light) .bg-slate-900\/60 {
+  background-color: rgba(28, 28, 31, 0.6) !important;
+}
+
+#app_container:not(.light) .bg-slate-850 {
+  background-color: #252529 !important; /* Medium desaturated gray */
+}
+
+#app_container:not(.light) .bg-slate-800 {
+  background-color: #2e2e33 !important; /* Lighter desaturated gray */
+}
+
+#app_container:not(.light) .bg-slate-800\/80 {
+  background-color: rgba(46, 46, 51, 0.8) !important;
+}
+
+#app_container:not(.light) .bg-slate-800\/60 {
+  background-color: rgba(46, 46, 51, 0.6) !important;
+}
+
+#app_container:not(.light) .bg-slate-750 {
+  background-color: #35353b !important;
+}
+
+#app_container:not(.light) .bg-slate-700 {
+  background-color: #3e3e44 !important;
+}
+
+/* Borders desaturated to low contrast soft levels */
+#app_container:not(.light) .border-slate-800,
+#app_container:not(.light) .border-slate-850,
+#app_container:not(.light) .border-slate-850\/80,
+#app_container:not(.light) .border-slate-800\/80,
+#app_container:not(.light) .border-slate-750,
+#app_container:not(.light) .border-slate-700 {
+  border-color: #26262a !important; /* Soft low-contrast border */
+}
+
+#app_container:not(.light) .border-r {
+  border-right-color: #26262a !important;
+}
+
+#app_container:not(.light) .border-b {
+  border-bottom-color: #26262a !important;
+}
+
+#app_container:not(.light) .border-t {
+  border-top-color: #26262a !important;
+}
+
+#app_container:not(.light) .border-l {
+  border-left-color: #26262a !important;
+}
+
+/* Text gray tones softened to prevent high-contrast glare */
+#app_container:not(.light) .text-slate-100 {
+  color: #e2e2e6 !important;
+}
+
+#app_container:not(.light) .text-slate-200 {
+  color: #cfccd2 !important;
+}
+
+#app_container:not(.light) .text-slate-300 {
+  color: #b8b5bd !important;
+}
+
+#app_container:not(.light) .text-slate-350,
+#app_container:not(.light) .text-slate-400 {
+  color: #8d8a93 !important;
+}
+
+#app_container:not(.light) .text-slate-500 {
+  color: #6b6870 !important;
+}
+
+#app_container:not(.light) .text-slate-600 {
+  color: #545259 !important;
+}
+
+/* Interactive custom styles for inputs and textareas with low glare */
+#app_container:not(.light) textarea,
+#app_container:not(.light) select,
+#app_container:not(.light) input {
+  background-color: #141416 !important;
+  color: #e2e2e6 !important;
+  border-color: #26262a !important;
+}
+
+#app_container:not(.light) select option {
+  background-color: #141416 !important;
+  color: #e2e2e6 !important;
+}
+
+/* Scrollbar/hover background overrides */
+#app_container:not(.light) .hover\:bg-slate-800:hover {
+  background-color: #2e2e33 !important;
+}
+
+#app_container:not(.light) .hover\:bg-slate-750:hover {
+  background-color: #35353b !important;
+}
+
+#app_container:not(.light) .hover\:bg-slate-700:hover {
+  background-color: #3e3e44 !important;
+}
+
+#app_container:not(.light) .hover\:border-slate-700:hover {
+  border-color: #3e3e44 !important;
+}
+
+#app_container:not(.light) .bg-slate-850.text-indigo-300 {
+  background-color: #252529 !important;
+  color: #b3c5ff !important;
+  border-color: #26262a !important;
+}
+
+/* Premium shimmering animations */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%) skewX(-15deg);
+  }
+  100% {
+    transform: translateX(100%) skewX(-15deg);
+  }
+}
+
+.animate-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-shimmer::after {
+  position: absolute;
+  top: -20px;
+  bottom: -20px;
+  left: 0;
+  width: 50%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.04) 30%,
+    rgba(255, 255, 255, 0.12) 60%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  content: '';
+  animation: shimmer 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+#app_container.light .animate-shimmer::after {
+  background: linear-gradient(
+    90deg,
+    rgba(99, 102, 241, 0) 0%,
+    rgba(99, 102, 241, 0.05) 30%,
+    rgba(99, 102, 241, 0.14) 60%,
+    rgba(99, 102, 241, 0) 100%
+  );
+}
+
+/* Ensure prompt editor content is always fully bold */
+.rich-prompt-input,
+.rich-prompt-input * {
+  font-weight: 700 !important;
+}
+
+/* Except the reference badges which should maintain clean bold font */
+.rich-prompt-input span[data-ref-id] {
+  font-weight: 700 !important;
+}
+
+
+
