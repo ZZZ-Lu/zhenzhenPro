@@ -4,7 +4,7 @@ import { createServer as createViteServer } from "vite";
 import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Proxy API requests - MUST be registered before body-parsers to avoid stream truncation with multipart data
 app.use(

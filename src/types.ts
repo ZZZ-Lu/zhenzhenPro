@@ -65,7 +65,7 @@ export interface ImageReference {
   id: string; // Persistent ID for @ referencing (e.g., "1", "2", "3")
   url: string | Blob; // Base64, image URL, or Blob
   name?: string; // Original filename of reference image
-  thumbnail?: string; // Base64 thumbnail string for faster list rendering
+  thumbnail?: string | Blob; // Thumbnail for faster list rendering (Blob -> Object URL)
 }
 
 export interface ImageWorkspace {

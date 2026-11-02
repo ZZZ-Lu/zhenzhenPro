@@ -127,11 +127,13 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
     localStorage.setItem("editor_pan", JSON.stringify(pan));
   }, [mode, color, penSize, eraserSize, scale, pan]);
 
-  const updateProjectThumbnail = async (projectId: string, dataUrl: string) => {
+  // Draft covers are display-only, so they are stored as Blobs (rendered via
+  // Object URLs) instead of base64 Data URLs.
+  const updateProjectThumbnail = async (projectId: string, thumb: Blob) => {
     const list = await getIndexedDBItem<DraftProject[]>("editor_projects") || [];
     const idx = list.findIndex(p => p.id === projectId);
     if (idx >= 0) {
-      list[idx].thumbnail = dataUrl;
+      list[idx].thumbnail = thumb;
       list[idx].updatedAt = Date.now();
       await setIndexedDBItem("editor_projects", list);
     }
@@ -154,7 +156,12 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
         thumbCtx.fillRect(0, 0, thumbCanvas.width, thumbCanvas.height);
         thumbCtx.drawImage(bgCanvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
         thumbCtx.drawImage(drawCanvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
-        await updateProjectThumbnail(currentProjectId, thumbCanvas.toDataURL("image/jpeg", 0.85));
+        const thumbBlob = await new Promise<Blob | null>((resolve) =>
+          thumbCanvas.toBlob(resolve, "image/jpeg", 0.85),
+        );
+        if (thumbBlob) {
+          await updateProjectThumbnail(currentProjectId, thumbBlob);
+        }
       }
 
       await setIndexedDBItem(`editor_bg_${currentProjectId}`, bgData).catch(console.error);
@@ -1140,7 +1147,7 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
       }
     }
 
-    let initialThumb = "";
+    let initialThumb: Blob | null = null;
     if (initialBg) {
       const thumbCanvas = document.createElement("canvas");
       thumbCanvas.width = 256;
@@ -1160,7 +1167,9 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
         if (isLoaded) {
           thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
         }
-        initialThumb = thumbCanvas.toDataURL("image/jpeg", 0.85);
+        initialThumb = await new Promise<Blob | null>((resolve) =>
+          thumbCanvas.toBlob(resolve, "image/jpeg", 0.85),
+        );
       }
     }
 

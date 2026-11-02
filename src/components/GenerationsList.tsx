@@ -19,6 +19,7 @@ import { GenerationItem, ImageReference } from "../types";
 import { SmartImage } from "./SmartImage";
 import { LazyImageWrapper } from "./LazyImageWrapper";
 import { getAspectRatioParams } from "../App";
+import { getCachedBlobUrl } from "../utils/blobUrlCache";
 
 const formatDuration = (totalSeconds: number) => {
   const m = Math.floor(totalSeconds / 60);
@@ -115,8 +116,8 @@ interface GenerationsListProps {
   handleCopyGenConfig: (gen: GenerationItem, label: string) => void;
   handleApplyConfigSlices: (gen: GenerationItem) => void;
   handleCopyPromptToClipboard: (prompt: string) => void;
-  handleDownloadImage: (
-    url: string,
+handleDownloadImage: (
+    url: string | Blob,
     prompt: string,
     trackId: string,
     genId: string,
@@ -228,9 +229,9 @@ export const GenerationsList = React.memo(
       <AnimatePresence initial={false}>
         {displayedGenerations.map((gen, gIdx) => {
           const imageList: {
-            url: string;
-            thumbnail_url?: string;
-            thumbnail_url_1k?: string;
+            url: string | Blob;
+            thumbnail_url?: string | Blob;
+            thumbnail_url_1k?: string | Blob;
           }[] = [];
           if (gen.status === "success" && gen.result?.data) {
             gen.result.data.forEach((item: any) => {
@@ -256,8 +257,12 @@ export const GenerationsList = React.memo(
               exit={{ opacity: 0, scale: 0.96, y: -10 }}
               transition={{ duration: 0.18 }}
               style={{
+                // Native windowing: offscreen cards are not rendered/painted.
+                // "auto <size>" lets the browser remember the real measured size
+                // after the first render instead of forcing a fixed 380x320
+                // estimate, which previously made the scrollbar/scrollTop jitter.
                 contentVisibility: "auto",
-                containIntrinsicSize: "380px 320px",
+                containIntrinsicSize: "auto 400px",
               }}
               className="bg-slate-950 hover:bg-slate-950/95 border border-slate-800 hover:border-slate-700/60 rounded-2xl p-0 flex flex-col relative group transition-colors duration-250 shadow-inner overflow-hidden"
             >
@@ -490,13 +495,14 @@ export const GenerationsList = React.memo(
                           imgItem.thumbnail_url_1k ||
                           (imgItem as any).thumbnail ||
                           imgItem.url;
-                        const isImageDownloaded =
+const isImageDownloaded =
+                          typeof url === "string" &&
                           gen.downloadedUrls?.includes(url);
 
                         return (
                           <div
-                            key={`${gen.id}-${url || uidx}`}
-                            data-lightbox-wrapper={url}
+                            key={`${gen.id}-${getCachedBlobUrl(url) || uidx}`}
+                            data-lightbox-wrapper={getCachedBlobUrl(url)}
                             data-track-id={wsId}
                             data-gen-id={gen.id}
                             data-img-index={uidx}
@@ -523,12 +529,7 @@ export const GenerationsList = React.memo(
                             }}
                             onDragStart={(e) => {
                               e.stopPropagation();
-                              const stringUrl =
-                                typeof url === "string"
-                                  ? url
-                                  : (url as any) instanceof Blob
-                                    ? URL.createObjectURL(url as any)
-                                    : "";
+                              const stringUrl = getCachedBlobUrl(url);
                               e.dataTransfer.setData("image-url", stringUrl);
                               e.dataTransfer.setData("text/plain", stringUrl);
                               const draggedData = {

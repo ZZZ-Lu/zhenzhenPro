@@ -20,6 +20,7 @@ import { SmartImage } from "./SmartImage";
 import { LazyImageWrapper } from "./LazyImageWrapper";
 import { getAspectRatioParams } from "../App";
 import { observeIntersection } from "../utils/intersectionPool";
+import { getCachedBlobUrl } from "../utils/blobUrlCache";
 
 const formatDuration = (totalSeconds: number) => {
   const m = Math.floor(totalSeconds / 60);
@@ -112,8 +113,8 @@ export interface GenerationCardItemProps {
   handleCopyGenConfig: (gen: GenerationItem, label: string) => void;
   handleApplyConfigSlices: (gen: GenerationItem) => void;
   handleCopyPromptToClipboard: (prompt: string) => void;
-  handleDownloadImage: (
-    url: string,
+handleDownloadImage: (
+    url: string | Blob,
     prompt: string,
     trackId: string,
     genId: string,
@@ -237,9 +238,9 @@ export const GenerationCardItem = React.memo(
     }
 
     const imageList: {
-      url: string;
-      thumbnail_url?: string;
-      thumbnail_url_1k?: string;
+      url: string | Blob;
+      thumbnail_url?: string | Blob;
+      thumbnail_url_1k?: string | Blob;
     }[] = [];
     if (gen.status === "success" && gen.result?.data) {
       gen.result.data.forEach((item: any) => {
@@ -504,12 +505,14 @@ export const GenerationCardItem = React.memo(
                     imgItem.thumbnail_url_1k ||
                     imgItem.thumbnail_url ||
                     imgItem.url;
-                  const isImageDownloaded = gen.downloadedUrls?.includes(url);
+                  const isImageDownloaded =
+                    typeof url === "string" &&
+                    gen.downloadedUrls?.includes(url);
 
                   return (
                     <div
                       key={uidx}
-                      data-lightbox-wrapper={url}
+                      data-lightbox-wrapper={getCachedBlobUrl(url)}
                       data-track-id={wsId}
                       data-gen-id={gen.id}
                       data-img-index={uidx}

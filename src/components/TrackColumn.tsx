@@ -139,8 +139,8 @@ export interface TrackColumnProps {
   setLightboxImage: (img: any) => void;
   lightboxImage: any;
   toggleStarGeneration: (trackId: string, genId: string) => void;
-  handleDownloadImage: (
-    url: string,
+handleDownloadImage: (
+    url: string | Blob,
     prompt: string,
     trackId: string,
     genId: string,
@@ -309,6 +309,11 @@ const TrackColumnComponent: React.FC<TrackColumnProps> = ({
       const st = el.scrollTop;
       trackScrollMemory.set(scrollKey, st);
       debouncedSetItem(scrollKey, st.toString());
+      // Nudge the offscreen generating-card tracker from this already-passive
+      // native listener. Previously the same nudge came from a React `onScroll`
+      // handler, which React binds as a NON-passive listener and which therefore
+      // ran on the scroll thread on every frame.
+      window.dispatchEvent(new CustomEvent("check-offscreen"));
     };
 
     el.addEventListener("scroll", handleScrollNative, { passive: true });
@@ -697,9 +702,6 @@ const TrackColumnComponent: React.FC<TrackColumnProps> = ({
         id={`track-scroll-container-${ws.id}`}
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto scrollbar-thin flex flex-col min-h-0"
-        onScroll={() => {
-          window.dispatchEvent(new CustomEvent("check-offscreen"));
-        }}
       >
         {/* 1. HEADER (TRACK NAME AND QUICK SETTINGS CONTROLS) */}
         <div className="sticky top-0 z-30 pt-4 px-4 pb-2.5 bg-slate-900 select-none flex-shrink-0 border-b border-slate-800/80 shadow-[0_4px_12px_rgba(0,0,0,0.25)]">

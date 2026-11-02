@@ -15,7 +15,8 @@ import {
   Brush
 } from "lucide-react";
 import { ImageReference } from "../types";
-import { createThumbnailToBase64, blobToBase64 } from "../utils/db";
+import { createThumbnailBlob, blobToBase64 } from "../utils/db";
+import { getCachedBlobUrl } from "../utils/blobUrlCache";
 import { ImageEditorModal } from "./ImageEditorModal";
 
 interface GlobalReferencePanelProps {
@@ -71,7 +72,7 @@ export function GlobalReferencePanel({
 
   const handleSaveSketch = async (base64Str: string, keepOpen?: boolean) => {
     try {
-      const thumb = await createThumbnailToBase64(base64Str, 256);
+      const thumb = await createThumbnailBlob(base64Str, 256);
       const newImages = [{
         id: crypto.randomUUID(),
         url: base64Str,
@@ -147,7 +148,7 @@ export function GlobalReferencePanel({
     for (const file of files) {
       try {
         const base64Str = await blobToBase64(file);
-        const thumb = await createThumbnailToBase64(base64Str, 256);
+        const thumb = await createThumbnailBlob(base64Str, 256);
         addedImages.push({
           id: crypto.randomUUID(),
           url: base64Str,
@@ -190,8 +191,8 @@ export function GlobalReferencePanel({
 
     if (targetUrl && typeof targetUrl === "string" && (customImageUrl || targetUrl.startsWith('http') || targetUrl.startsWith('data:image/') || targetUrl.startsWith('blob:'))) {
       try {
-        let base64Url = targetUrl;
-        let thumb = "";
+let base64Url = targetUrl;
+        let thumb: Blob | null = null;
         if (!targetUrl.startsWith('data:image/')) {
           try {
             const res = await fetch(targetUrl);
@@ -199,19 +200,19 @@ export function GlobalReferencePanel({
             if (contentType && contentType.startsWith("image/")) {
               const blob = await res.blob();
               base64Url = await blobToBase64(blob);
-              thumb = await createThumbnailToBase64(base64Url, 256);
+              thumb = await createThumbnailBlob(base64Url, 256);
             }
           } catch (fetchErr) {
             console.warn("Could not fetch image to convert to base64, using original URL:", fetchErr);
           }
         } else {
-          thumb = await createThumbnailToBase64(base64Url, 256);
+          thumb = await createThumbnailBlob(base64Url, 256);
         }
         
         addedImages.push({
           id: crypto.randomUUID(),
           url: base64Url,
-          thumbnail: thumb || base64Url,
+          thumbnail: thumb || undefined,
           name: "Generated Image",
         });
         handled = true;
@@ -227,7 +228,7 @@ export function GlobalReferencePanel({
         
         try {
           const base64Str = await blobToBase64(file);
-          const thumb = await createThumbnailToBase64(base64Str, 256);
+          const thumb = await createThumbnailBlob(base64Str, 256);
           addedImages.push({
             id: crypto.randomUUID(),
             url: base64Str,
@@ -348,14 +349,9 @@ export function GlobalReferencePanel({
                           e.dataTransfer.setData("text/plain", typeof img.url === "string" ? img.url : "");
                           e.dataTransfer.setData("image-url", typeof img.url === "string" ? img.url : "");
                         }}
-                        src={
-                          img.thumbnail ||
-                          (typeof img.url === "string" && img.url.startsWith("data:")
-                            ? img.url
-                            : typeof img.url === "string"
-                              ? img.url
-                              : "")
-                        }
+                        src={getCachedBlobUrl(
+                          img.thumbnail || (typeof img.url === "string" ? img.url : undefined),
+                        )}
                         alt={img.name || "Reference"}
                         className="w-full h-auto block rounded-md"
                       />
@@ -416,14 +412,9 @@ export function GlobalReferencePanel({
                           e.dataTransfer.setData("text/plain", typeof img.url === "string" ? img.url : "");
                           e.dataTransfer.setData("image-url", typeof img.url === "string" ? img.url : "");
                         }}
-                        src={
-                          img.thumbnail ||
-                          (typeof img.url === "string" && img.url.startsWith("data:")
-                            ? img.url
-                            : typeof img.url === "string"
-                              ? img.url
-                              : "")
-                        }
+                        src={getCachedBlobUrl(
+                          img.thumbnail || (typeof img.url === "string" ? img.url : undefined),
+                        )}
                         alt={img.name || "Reference"}
                         className="w-full h-auto block rounded-md"
                       />
@@ -491,14 +482,9 @@ export function GlobalReferencePanel({
                       e.dataTransfer.setData("text/plain", typeof img.url === "string" ? img.url : "");
                       e.dataTransfer.setData("image-url", typeof img.url === "string" ? img.url : "");
                     }}
-                    src={
-                      img.thumbnail ||
-                      (typeof img.url === "string" && img.url.startsWith("data:")
-                        ? img.url
-                        : typeof img.url === "string"
-                          ? img.url
-                          : "")
-                    }
+                    src={getCachedBlobUrl(
+                          img.thumbnail || (typeof img.url === "string" ? img.url : undefined),
+                        )}
                     alt={img.name || "Ref"}
                     className="w-full h-auto block rounded-[5px]"
                   />

@@ -11,9 +11,10 @@ import {
   setIndexedDBItem,
   base64ToBlob,
   blobToBase64,
-  requestStoragePersistence,
-  createThumbnailToBase64,
+requestStoragePersistence,
+  createThumbnailBlob,
 } from "./utils/db";
+import { getCachedBlobUrl } from "./utils/blobUrlCache";
 import { SmartImage } from "./components/SmartImage";
 import {
   Activity,
@@ -322,8 +323,8 @@ export const getAspectRatioValue = (
 
 const setCustomDragImage = (
   e: React.DragEvent,
-  url: string,
-  thumbUrl?: string,
+  url: string | Blob,
+  thumbUrl?: string | Blob,
 ) => {
   try {
     const targetNode = e.target as HTMLElement;
@@ -367,7 +368,7 @@ const setCustomDragImage = (
     dragGhost.style.opacity = "0.7";
 
     const img = document.createElement("img");
-    img.src = thumbUrl || url;
+    img.src = getCachedBlobUrl(thumbUrl || url);
     img.style.width = "100%";
     img.style.height = "100%";
     img.style.objectFit = "cover";
@@ -474,7 +475,9 @@ const autoRepairWorkspaces = (raw: any[]): ImageWorkspace[] => {
                   ? img.name
                   : `参考图_${idx + 1}.png`,
               thumbnail:
-                typeof img.thumbnail === "string" ? img.thumbnail : undefined,
+                typeof img.thumbnail === "string" || img.thumbnail instanceof Blob
+                  ? img.thumbnail
+                  : undefined,
             };
           }
           return null;
@@ -582,60 +585,192 @@ const getTrimmedWorkspacesForBackup = (
   });
 };
 
-// Helper to generate a 100-column, 1000-image test workspace project for scroll performance testing
-const generatePerfTestWorkspaces = (): ImageWorkspace[] => {
-  const columnsCount = 100;
-  const imagesPerColumn = 10;
+// ---------------------------------------------------------------------------
+// Performance test fixture (100 columns / 1000 images).
+//
+// The images are bundled locally under `public/perf-samples` and rendered into
+// Blobs that mirror the real generation pipeline: a full-size `url` Blob at the
+// generation resolution, a 256px `thumbnail_url` Blob, and (for 4K only) a
+// 2560px `thumbnail_url_1k` Blob. Nothing here touches the network and nothing
+// is stored as base64.
+// ---------------------------------------------------------------------------
+// 性能测试项目仅在开发模式下启用：该编译期常量由 vite.config.ts 的 define 注入，
+// dev 服务器下为 true，生产构建（vite build）下为 false 并被摇树移除，
+// 因此正式用户不会被强制注入测试项目。
+declare const __PERF_TEST_FIXTURE__: boolean;
+
+const PERF_TEST_COLUMNS = 100;
+const PERF_TEST_IMAGES_PER_COLUMN = 10;
+const PERF_SAMPLE_COUNT = 6;
+const PERF_DATA_VERSION = 2;
+
+type PerfTier = "1k" | "2k" | "4k";
+
+const PERF_TIER_DIMS: Record<
+  PerfTier,
+  { width: number; height: number; size: string }
+> = {
+  "1k": { width: 1024, height: 1024, size: "1:1" },
+  "2k": { width: 2560, height: 1440, size: "16:9" },
+  "4k": { width: 3840, height: 2160, size: "16:9" },
+};
+
+const perfSampleUrl = (index: number): string => {
+  const base = (import.meta as any)?.env?.BASE_URL ?? "/";
+  return `${base}perf-samples/perf-${String(index + 1).padStart(2, "0")}.jpg`;
+};
+
+const createPerfGrainTile = (): HTMLCanvasElement | null => {
+  const tile = document.createElement("canvas");
+  tile.width = 128;
+  tile.height = 128;
+  const ctx = tile.getContext("2d");
+  if (!ctx) return null;
+  const data = ctx.createImageData(tile.width, tile.height);
+  for (let i = 0; i < data.data.length; i += 4) {
+    const v = 105 + Math.floor(Math.random() * 96);
+    data.data[i] = v;
+    data.data[i + 1] = v;
+    data.data[i + 2] = v;
+    data.data[i + 3] = 255;
+  }
+  ctx.putImageData(data, 0, 0);
+  return tile;
+};
+
+const renderPerfFullBlob = async (
+  bitmap: ImageBitmap,
+  width: number,
+  height: number,
+  grain: HTMLCanvasElement | null,
+): Promise<Blob | null> => {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  const scale = Math.max(width / bitmap.width, height / bitmap.height);
+  const drawWidth = bitmap.width * scale;
+  const drawHeight = bitmap.height * scale;
+  ctx.drawImage(
+    bitmap,
+    (width - drawWidth) / 2,
+    (height - drawHeight) / 2,
+    drawWidth,
+    drawHeight,
+  );
+  // Very light grain keeps the JPEG entropy (and therefore the byte size) close
+  // to a real generation instead of a flat, over-clean placeholder.
+  if (grain) {
+    const pattern = ctx.createPattern(grain, "repeat");
+    if (pattern) {
+      ctx.globalAlpha = 0.045;
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, 0, width, height);
+      ctx.globalAlpha = 1;
+    }
+  }
+  return await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", 0.9),
+  );
+};
+
+const generatePerfTestWorkspaces = async (): Promise<ImageWorkspace[]> => {
   const list: ImageWorkspace[] = [];
 
-  for (let col = 1; col <= columnsCount; col++) {
-    const generations: GenerationItem[] = [];
-    for (let img = 1; img <= imagesPerColumn; img++) {
-      const imgNum = (col - 1) * imagesPerColumn + img;
-      
-      let resTag: "1k" | "2k" | "4k" = "1k";
-      let width = 1024;
-      let height = 1024;
-      
-      const mod = imgNum % 3;
-      if (mod === 0) {
-        resTag = "4k";
-        width = 3840;
-        height = 2160;
-      } else if (mod === 2) {
-        resTag = "2k";
-        width = 2560;
-        height = 1440;
-      } else {
-        resTag = "1k";
-        width = 1024;
-        height = 1024;
-      }
+  // 1) Decode the bundled sample photos. Everything is same-origin, so this
+  //    works offline and never taints the canvas.
+  const bitmaps: ImageBitmap[] = [];
+  for (let i = 0; i < PERF_SAMPLE_COUNT; i++) {
+    try {
+      const response = await fetch(perfSampleUrl(i), { cache: "force-cache" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      bitmaps.push(await createImageBitmap(await response.blob()));
+    } catch (err) {
+      console.warn("Perf fixture: failed to load sample", i, err);
+    }
+  }
+  if (bitmaps.length === 0) {
+    console.warn("Perf fixture: no sample images available, keeping existing data.");
+    return list;
+  }
 
-      const imageUrl = `https://picsum.photos/seed/perf_${imgNum}/${width}/${height}`;
-      const thumbUrl = `https://picsum.photos/seed/perf_${imgNum}/300/300`;
+  const yieldToBrowser = () =>
+    new Promise((resolve) => setTimeout(resolve, 0));
+  const grain = createPerfGrainTile();
+
+  // 2) Pre-render the distinct Blobs: one full-size image per sample and tier,
+  //    plus its thumbnails. Every card reuses the same Blob objects, so the
+  //    IndexedDB payload stays realistic without duplicating bytes.
+  const fullCache = new Map<string, Blob | null>();
+  const thumbCache = new Map<string, Blob | null>();
+  for (let sample = 0; sample < bitmaps.length; sample++) {
+    for (const tier of ["1k", "2k", "4k"] as PerfTier[]) {
+      const dims = PERF_TIER_DIMS[tier];
+      const full = await renderPerfFullBlob(
+        bitmaps[sample],
+        dims.width,
+        dims.height,
+        grain,
+      );
+      fullCache.set(`${sample}:${tier}`, full);
+      await yieldToBrowser();
+      if (full) {
+        thumbCache.set(
+          `${sample}:${tier}`,
+          await createThumbnailBlob(full, 256),
+        );
+        await yieldToBrowser();
+        if (tier === "4k") {
+          thumbCache.set(
+            `${sample}:${tier}:1k`,
+            await createThumbnailBlob(full, 2560),
+          );
+          await yieldToBrowser();
+        }
+      }
+    }
+  }
+  bitmaps.forEach((bitmap) => bitmap.close());
+
+  // 3) Assemble the 100 columns x 10 images, reusing the cached Blobs.
+  for (let col = 1; col <= PERF_TEST_COLUMNS; col++) {
+    const generations: GenerationItem[] = [];
+    for (let img = 1; img <= PERF_TEST_IMAGES_PER_COLUMN; img++) {
+      const imgNum = (col - 1) * PERF_TEST_IMAGES_PER_COLUMN + img;
+      const mod = imgNum % 3;
+      const tier: PerfTier = mod === 0 ? "4k" : mod === 2 ? "2k" : "1k";
+      const sample = (imgNum - 1) % bitmaps.length;
+      const full = fullCache.get(`${sample}:${tier}`) ?? null;
+      const thumb = thumbCache.get(`${sample}:${tier}`) ?? null;
+      const thumb1k =
+        tier === "4k" ? thumbCache.get(`${sample}:${tier}:1k`) ?? null : null;
 
       generations.push({
         id: `gen-perf-${col}-${img}`,
-        prompt: `100列测试 [${resTag.toUpperCase()}] 图片 #${imgNum} (第${col}列 第${img}张)`,
+        prompt: `100列测试 [${tier.toUpperCase()}] 图片 #${imgNum} (第${col}列 第${img}张)`,
         refImages: [],
         model: "gpt-image-2-all",
-        size: "1:1",
-        resolution: resTag,
+        size: PERF_TIER_DIMS[tier].size,
+        resolution: tier,
         callFormat: "images",
-        status: "success",
+        status: full ? "success" : "error",
         timestamp: new Date(Date.now() - imgNum * 30000).toLocaleTimeString(),
         createdAt: Date.now() - imgNum * 30000,
         isStarred: imgNum % 7 === 0,
-        result: {
-          data: [
-            {
-              url: imageUrl,
-              thumbnail_url: thumbUrl,
-              thumbnail_url_1k: imageUrl,
-            },
-          ],
-        },
+        result: full
+          ? {
+              data: [
+                {
+                  url: full,
+                  thumbnail_url: thumb ?? undefined,
+                  thumbnail_url_1k: thumb1k ?? undefined,
+                },
+              ],
+            }
+          : undefined,
       });
     }
 
@@ -657,6 +792,7 @@ const generatePerfTestWorkspaces = (): ImageWorkspace[] => {
 
   return list;
 };
+
 
 export default function App() {
   const isDevEnvironment =
@@ -817,8 +953,27 @@ export default function App() {
   }, [workspaces]);
 
   const checkOffscreenTimeoutRef = useRef<number | null>(null);
+  // Mirror of the live "generating" card count. Reading it from a ref lets the
+  // scroll handler bail out before touching the DOM, instead of paying a
+  // getBoundingClientRect() + querySelectorAll() on every scroll frame.
+  const generatingCountRef = useRef(0);
+  useEffect(() => {
+    generatingCountRef.current = workspaces.reduce(
+      (acc, ws) =>
+        acc + ws.generations.filter((g) => g.status === "generating").length,
+      0,
+    );
+  }, [workspaces]);
 
   const checkOffscreenGenerating = useCallback(() => {
+    // Fast path: nothing to track -> no layout reads, no DOM queries at all.
+    if (
+      generatingCountRef.current === 0 &&
+      recentFinishedGensRef.current.size === 0
+    ) {
+      setIndicators((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
     if (checkOffscreenTimeoutRef.current !== null) return;
     checkOffscreenTimeoutRef.current = window.setTimeout(() => {
       checkOffscreenTimeoutRef.current = null;
@@ -1487,8 +1642,8 @@ export default function App() {
     const getTrackVisibleImages = (track: ImageWorkspace) => {
       const currentFilter = trackFilters[track.id] || "all";
       const list: {
-        url: string;
-        thumbnail_url?: string;
+        url: string | Blob;
+        thumbnail_url?: string | Blob;
         prompt: string;
         gen: any;
         trackId: string;
@@ -1532,8 +1687,8 @@ export default function App() {
       const list: {
         gen: any;
         trackId: string;
-        url: string;
-        thumbnail_url?: string;
+        url: string | Blob;
+        thumbnail_url?: string | Blob;
       }[] = [];
       workspaces.forEach((ws) => {
         const gens = ws.generations || [];
@@ -1582,7 +1737,7 @@ export default function App() {
 
       // Find the current active thumbnail in DOM
       let currentThumb = allThumbs.find(
-        (el) => el.getAttribute("data-url") === url,
+        (el) => el.getAttribute("data-url") === getCachedBlobUrl(url),
       );
 
       // Robust lookup if url is a Blob object (where data-url equals "[object Blob]" or url isn't found directly)
@@ -1794,15 +1949,13 @@ export default function App() {
       return false;
     });
 
-    // Fallback URL-only lookup (safely checking Blob vs string)
+    // Fallback URL-only lookup: compare on the normalized object URL so that
+    // Blob-backed images keep a stable string identity across DOM and state.
     if (!currentWrapper) {
-      currentWrapper = allWrappers.find((el) => {
-        const elUrl = el.getAttribute("data-lightbox-wrapper");
-        if (url instanceof Blob) {
-          return elUrl === "[object Blob]";
-        }
-        return elUrl === url;
-      });
+      const targetUrlKey = getCachedBlobUrl(url);
+      currentWrapper = allWrappers.find(
+        (el) => el.getAttribute("data-lightbox-wrapper") === targetUrlKey,
+      );
     }
 
     let spatialSuccess = false;
@@ -2240,19 +2393,20 @@ export default function App() {
         const allWrappers = Array.from(
           scopeEl.querySelectorAll("[data-lightbox-wrapper]"),
         );
+        const targetUrlKey = getCachedBlobUrl(targetImg.url);
         const targetEl =
           allWrappers.find((el) => {
             const elUrl = el.getAttribute("data-lightbox-wrapper");
             const elTrackId = el.getAttribute("data-track-id");
             const elGenId = el.getAttribute("data-gen-id");
             return (
-              elUrl === targetImg.url &&
+              elUrl === targetUrlKey &&
               elTrackId === trackId &&
               elGenId === targetImg.gen?.id
             );
           }) ||
           allWrappers.find(
-            (el) => el.getAttribute("data-lightbox-wrapper") === targetImg.url,
+            (el) => el.getAttribute("data-lightbox-wrapper") === targetUrlKey,
           );
 
         if (targetEl) {
@@ -2855,23 +3009,26 @@ export default function App() {
           await setIndexedDBItem("img_studio_active_project_v2", "default");
         }
 
-        // 自动注入 100列1000图 性能测试项目 (含 1K/2K/4K 分辨率)
-        const PERF_TEST_ID = "perf-test-100x10";
-        let perfProj = loadedProjects.find((p) => p.id === PERF_TEST_ID || p.id === "perf-test-10x1000" || p.id === "perf-test-10x100");
-        if (!perfProj) {
-          perfProj = {
-            id: PERF_TEST_ID,
-            name: "⚡ 性能测试项目 (100列/1000图 1K/2K/4K)",
-            createdAt: Date.now(),
-          };
-          loadedProjects.unshift(perfProj);
-          loadedActive = PERF_TEST_ID;
-          await setIndexedDBItem("img_studio_projects_v2", loadedProjects);
-          await setIndexedDBItem("img_studio_active_project_v2", loadedActive);
-        } else {
-          if (perfProj.name !== "⚡ 性能测试项目 (100列/1000图 1K/2K/4K)") {
-            perfProj.name = "⚡ 性能测试项目 (100列/1000图 1K/2K/4K)";
+        // 性能测试项目仅在开发模式下自动注入；生产环境不启用，避免给正式用户强制添加测试项目。
+        if (__PERF_TEST_FIXTURE__) {
+          // 自动注入 100列1000图 性能测试项目 (含 1K/2K/4K 分辨率)
+          const PERF_TEST_ID = "perf-test-100x10";
+          let perfProj = loadedProjects.find((p) => p.id === PERF_TEST_ID || p.id === "perf-test-10x1000" || p.id === "perf-test-10x100");
+          if (!perfProj) {
+            perfProj = {
+              id: PERF_TEST_ID,
+              name: "⚡ 性能测试项目 (100列/1000图 1K/2K/4K)",
+              createdAt: Date.now(),
+            };
+            loadedProjects.unshift(perfProj);
+            loadedActive = PERF_TEST_ID;
             await setIndexedDBItem("img_studio_projects_v2", loadedProjects);
+            await setIndexedDBItem("img_studio_active_project_v2", loadedActive);
+          } else {
+            if (perfProj.name !== "⚡ 性能测试项目 (100列/1000图 1K/2K/4K)") {
+              perfProj.name = "⚡ 性能测试项目 (100列/1000图 1K/2K/4K)";
+              await setIndexedDBItem("img_studio_projects_v2", loadedProjects);
+            }
           }
         }
 
@@ -2996,21 +3153,42 @@ export default function App() {
           }
         }
 
-        // If this is the performance test project and data is missing or incomplete, generate 100 columns & 1000 images
-        const isPerfProj = activeProjectId === "perf-test-100x10" || activeProjectId === "perf-test-10x1000" || activeProjectId === "perf-test-10x100";
-        const isPerfIncomplete = isPerfProj && (!dbWorkspaces || !Array.isArray(dbWorkspaces) || dbWorkspaces.length < 100);
+        // If this is the performance test project and the data is missing, incomplete,
+        // or was produced by an older fixture version, (re)generate 100 columns & 1000 images.
+        // 性能测试夹具也只在开发模式下生成/重建
+        const isPerfProj =
+          __PERF_TEST_FIXTURE__ &&
+          (activeProjectId === "perf-test-100x10" || activeProjectId === "perf-test-10x1000" || activeProjectId === "perf-test-10x100");
+        const perfVersionKey = `img_studio_perf_version_${activeProjectId}`;
+        const storedPerfVersion = isPerfProj
+          ? await getIndexedDBItem<number>(perfVersionKey)
+          : null;
+        const isPerfStale = isPerfProj && storedPerfVersion !== PERF_DATA_VERSION;
+        const isPerfIncomplete =
+          isPerfProj &&
+          (isPerfStale ||
+            !dbWorkspaces ||
+            !Array.isArray(dbWorkspaces) ||
+            dbWorkspaces.length < 100);
 
         if (isPerfIncomplete) {
-          const perfDefaults = generatePerfTestWorkspaces();
-          dbWorkspaces = perfDefaults;
-          try {
-            await setIndexedDBItem(wsKey, perfDefaults);
-            await setIndexedDBItem(
-              backupKey,
-              getTrimmedWorkspacesForBackup(perfDefaults),
+          const perfDefaults = await generatePerfTestWorkspaces();
+          if (Array.isArray(perfDefaults) && perfDefaults.length > 0) {
+            dbWorkspaces = perfDefaults;
+            try {
+              await setIndexedDBItem(wsKey, perfDefaults);
+              await setIndexedDBItem(
+                backupKey,
+                getTrimmedWorkspacesForBackup(perfDefaults),
+              );
+              await setIndexedDBItem(perfVersionKey, PERF_DATA_VERSION);
+            } catch (wErr) {
+              console.warn("Failed to write perf test workspaces:", wErr);
+            }
+          } else {
+            console.warn(
+              "Perf fixture produced no data; keeping the existing workspaces.",
             );
-          } catch (wErr) {
-            console.warn("Failed to write perf test workspaces:", wErr);
           }
         }
 
@@ -3953,7 +4131,7 @@ export default function App() {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith("image/")) continue;
       try {
-        const thumb = await createThumbnailToBase64(file, 160);
+        const thumb = await createThumbnailBlob(file, 160);
         setWorkspaces((prev) =>
           prev.map((w) => {
             if (w.id === trackId) {
@@ -6257,21 +6435,6 @@ export default function App() {
           return await res.blob();
         };
 
-        const localBlobToDataURL = (blob: Blob): Promise<string> => {
-          return new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              if (reader.result) {
-                resolve(reader.result as string);
-              } else {
-                reject(new Error("Failed to convert blob to data URL"));
-              }
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-        };
-
         resData.data = await Promise.all(
           resData.data.map(async (img: any) => {
             let processedUrl = img.url;
@@ -6282,10 +6445,12 @@ export default function App() {
                 : `data:image/png;base64,${img.b64_json}`;
 
               const blob = await base64ToBlob(fullB64);
-              const thumb = await createThumbnailToBase64(fullB64);
+              // Thumbnails are display-only: keep them as Blobs (rendered via
+              // Object URLs) so no base64 ever enters state / IndexedDB.
+              const thumb = (await createThumbnailBlob(blob)) || undefined;
               const thumb1k =
                 resolutionToUse === "4k"
-                  ? await createThumbnailToBase64(fullB64, 2560)
+                  ? (await createThumbnailBlob(blob, 2560)) || undefined
                   : undefined;
               return {
                 ...img,
@@ -6302,11 +6467,11 @@ export default function App() {
               try {
                 // Use fetchBlobWithAuth to ensure Authorization header is passed and CORS is bypassed correctly
                 const fetchedBlob = await localFetchBlobWithAuth(processedUrl);
-                const fullB64 = await localBlobToDataURL(fetchedBlob);
-                const thumb = await createThumbnailToBase64(fullB64);
+                // Thumbnails are display-only Blobs (see note in the b64 branch).
+                const thumb = (await createThumbnailBlob(fetchedBlob)) || undefined;
                 const thumb1k =
                   resolutionToUse === "4k"
-                    ? await createThumbnailToBase64(fullB64, 2560)
+                    ? (await createThumbnailBlob(fetchedBlob, 2560)) || undefined
                     : undefined;
                 return {
                   ...img,
@@ -6334,11 +6499,12 @@ export default function App() {
               typeof processedUrl === "string" &&
               processedUrl.startsWith("data:")
             ) {
-              const blob = await base64ToBlob(processedUrl);
-              const thumb = await createThumbnailToBase64(processedUrl);
+                const blob = await base64ToBlob(processedUrl);
+              // Thumbnails are display-only Blobs (see note in the b64 branch).
+              const thumb = (await createThumbnailBlob(blob)) || undefined;
               const thumb1k =
                 resolutionToUse === "4k"
-                  ? await createThumbnailToBase64(processedUrl, 2560)
+                  ? (await createThumbnailBlob(blob, 2560)) || undefined
                   : undefined;
               return {
                 ...img,
@@ -6427,7 +6593,7 @@ export default function App() {
 
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => {
+    img.onload = async () => {
       try {
         const canvas = document.createElement("canvas");
         canvas.width = img.width;
@@ -6443,7 +6609,12 @@ export default function App() {
         }
         ctx.filter = `blur(${blurPx}px)`;
         ctx.drawImage(img, 0, 0);
-        const blurredDataUrl = canvas.toDataURL("image/jpeg", 0.9);
+        // The blurred source only ever feeds the model request, so keep it as a
+        // Blob end-to-end and let the send path convert it to base64 when needed.
+        const blurredBlob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg", 0.9),
+        );
+        if (!blurredBlob) throw new Error("Failed to rasterize blurred reference");
 
         let cleanBasePrompt = prompt || "";
         cleanBasePrompt = cleanBasePrompt.replace(
@@ -6468,7 +6639,7 @@ export default function App() {
         const refImages: ImageReference[] = [
           {
             id: refId,
-            url: blurredDataUrl,
+            url: blurredBlob,
             name: filename,
           },
         ];
@@ -8922,9 +9093,9 @@ export default function App() {
                   const items: {
                     gen: GenerationItem;
                     trackId: string;
-                    url: string;
-                    thumbnail_url?: string;
-                    thumbnail_url_1k?: string;
+                    url: string | Blob;
+                    thumbnail_url?: string | Blob;
+                    thumbnail_url_1k?: string | Blob;
                     imgIndex: number;
                   }[] = [];
                   workspaces.forEach((ws) => {
@@ -9009,7 +9180,7 @@ export default function App() {
                         <div
                           key={`${item.gen.id}-${idx}`}
                           className="relative break-inside-avoid group cursor-pointer overflow-hidden bg-slate-900"
-                          data-lightbox-wrapper={item.url}
+                          data-lightbox-wrapper={getCachedBlobUrl(item.url)}
                           data-track-id={item.trackId}
                           data-gen-id={item.gen.id}
                           data-img-index={item.imgIndex}
@@ -9036,8 +9207,9 @@ export default function App() {
                           }}
                           draggable={true}
                           onDragStart={(e) => {
-                            e.dataTransfer.setData("image-url", item.url);
-                            e.dataTransfer.setData("text/plain", item.url);
+                            const dragUrl = getCachedBlobUrl(item.url);
+                            e.dataTransfer.setData("image-url", dragUrl);
+                            e.dataTransfer.setData("text/plain", dragUrl);
                             setCustomDragImage(e, item.url, item.thumbnail_url);
                             const itemData = {
                               url: item.url,

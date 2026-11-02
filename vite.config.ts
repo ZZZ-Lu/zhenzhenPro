@@ -3,8 +3,18 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  // vite build（生产）时为 true，vite dev / middlewareMode（开发）时为 false
+  const isProductionBuild = command === 'build';
   return {
+    // 性能测试样张（public/perf-samples 下的写实照片）只在开发模式提供，
+    // 生产构建不拷贝这些测试资源，避免随产物一起发布。
+    publicDir: isProductionBuild ? false : 'public',
+    define: {
+      // 性能测试项目开关：开发模式启用，生产构建关闭。
+      // 编译期常量，生产包中该分支会被直接移除。
+      __PERF_TEST_FIXTURE__: JSON.stringify(!isProductionBuild),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

@@ -42,6 +42,14 @@ export const VirtualTrackColumn = React.memo(function VirtualTrackColumn(
   const { ws, trIdx, theme } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const [isInViewport, setIsInViewport] = useState<boolean>(trIdx < 4);
+  // Hysteresis timer: a column that leaves the observer margin is NOT torn down
+  // immediately. During a fast horizontal drag a column can cross the margin
+  // boundary back and forth several times per second; unmounting/remounting the
+  // whole (heavy) TrackColumn on every crossing produced a mount storm. Instead
+  // we wait a short idle window before swapping to the skeleton, and cancel that
+  // teardown as soon as the column scrolls back in. Entering remains immediate,
+  // so content and images are still ready before the column is visible.
+  const unmountTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -54,13 +62,29 @@ export const VirtualTrackColumn = React.memo(function VirtualTrackColumn(
 
     const observer = getSharedColumnObserver(scrollRoot);
     columnCallbacksMap.set(el, (intersecting) => {
-      setIsInViewport(intersecting);
+      if (intersecting) {
+        if (unmountTimerRef.current !== null) {
+          window.clearTimeout(unmountTimerRef.current);
+          unmountTimerRef.current = null;
+        }
+        setIsInViewport(true);
+        return;
+      }
+      if (unmountTimerRef.current !== null) return;
+      unmountTimerRef.current = window.setTimeout(() => {
+        unmountTimerRef.current = null;
+        setIsInViewport(false);
+      }, 240);
     });
     observer.observe(el);
 
     return () => {
       columnCallbacksMap.delete(el);
       observer.unobserve(el);
+      if (unmountTimerRef.current !== null) {
+        window.clearTimeout(unmountTimerRef.current);
+        unmountTimerRef.current = null;
+      }
     };
   }, []);
 

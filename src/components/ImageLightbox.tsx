@@ -395,7 +395,7 @@ const PanoramaColumn = React.memo(
         {validGenerations.map((gen: any) => {
           const imageList: {
             url: string | Blob;
-            thumbnail_url?: string;
+            thumbnail_url?: string | Blob;
             originalIdx: number;
           }[] = [];
           if (gen.status === "generating") {
@@ -483,10 +483,9 @@ const PanoramaColumn = React.memo(
                   );
                 }
 
-                const displaySrc =
-                  typeof imgUrl === "string"
-                    ? thumbnail_url || imgUrl
-                    : getCachedBlobUrl(imgUrl);
+                const displaySrc = getCachedBlobUrl(
+                  thumbnail_url || imgUrl,
+                );
                 const isActive =
                   activeUrl !== null &&
                   ((activeGenId === gen.id &&

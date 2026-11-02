@@ -20,12 +20,13 @@ import {
   Plus
 } from "lucide-react";
 import { getIndexedDBItem, setIndexedDBItem, removeIndexedDBItem } from "../utils/db";
+import { getCachedBlobUrl } from "../utils/blobUrlCache";
 import { SharpStar } from "./SharpStar";
 
 export interface DraftProject {
   id: string;
   name: string;
-  thumbnail: string;
+  thumbnail?: string | Blob;
   updatedAt: number;
   width: number;
   height: number;
@@ -546,7 +547,7 @@ export const DraftHome: React.FC<DraftHomeProps> = ({
                         
                         {p.thumbnail ? (
                           <img
-                            src={p.thumbnail}
+                            src={getCachedBlobUrl(p.thumbnail)}
                             alt={p.name}
                             className="w-full h-full object-contain p-2.5 group-hover:scale-105 transition-transform duration-300"
                             loading="lazy"
@@ -660,7 +661,7 @@ export const DraftHome: React.FC<DraftHomeProps> = ({
                         <td className="py-2.5 px-4 flex items-center gap-3">
                           <div className={`w-10 h-10 rounded-lg overflow-hidden flex items-center justify-center shrink-0 border ${isDark ? "bg-neutral-950 border-neutral-800" : "bg-neutral-100 border-neutral-200"}`}>
                             {p.thumbnail ? (
-                              <img src={p.thumbnail} alt={p.name} className="w-full h-full object-contain" />
+                              <img src={getCachedBlobUrl(p.thumbnail)} alt={p.name} className="w-full h-full object-contain" />
                             ) : (
                               <ImageIcon className="w-4 h-4 text-neutral-600" />
                             )}

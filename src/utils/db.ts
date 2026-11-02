@@ -268,45 +268,78 @@ export async function requestStoragePersistence(): Promise<boolean> {
 }
 
 
-export const createThumbnailToBase64 = async (
+/**
+ * Downscale any image source (Data URL / remote URL / Blob) into a Blob.
+ *
+ * This is the single thumbnail primitive used across the app: thumbnails are
+ * only ever needed for on-screen rendering (list / card / lightbox), so they
+ * are produced as Blobs and displayed through Object URLs. Base64/Data URL
+ * strings are therefore never generated for storage or display paths anymore,
+ * which keeps memory flat and lets the browser decode/evict natively.
+ *
+ * Returns `null` when the source cannot be decoded (e.g. a CORS-tainted remote
+ * image), so callers can fall back gracefully.
+ */
+export const createThumbnailBlob = async (
   input: string | Blob,
   maxDim: number = 256,
-): Promise<string> => {
+  quality: number = 0.6,
+): Promise<Blob | null> => {
   return new Promise((resolve) => {
     const img = new Image();
     let objectUrl = "";
+    const cleanup = () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = "";
+      }
+    };
+
     img.onload = () => {
-      let width = img.width;
-      let height = img.height;
-      if (width > maxDim || height > maxDim) {
-        if (width > height) {
-          height = Math.round((height * maxDim) / width);
-          width = maxDim;
-        } else {
-          width = Math.round((width * maxDim) / height);
-          height = maxDim;
+      try {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
         }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          cleanup();
+          resolve(null);
+          return;
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            cleanup();
+            resolve(blob);
+          },
+          "image/jpeg",
+          quality,
+        );
+      } catch (err) {
+        // Canvas taint / decode issues -> no thumbnail, caller falls back.
+        cleanup();
+        resolve(null);
       }
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        resolve(typeof input === "string" ? input : ""); // Fallback
-        return;
-      }
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(img, 0, 0, width, height);
-      const result = canvas.toDataURL("image/jpeg", 0.6);
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      resolve(result);
     };
+
     img.onerror = () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      resolve(typeof input === "string" ? input : "");
+      cleanup();
+      resolve(null);
     };
+
     if (input instanceof Blob) {
       objectUrl = URL.createObjectURL(input);
       img.src = objectUrl;
@@ -315,3 +348,8 @@ export const createThumbnailToBase64 = async (
     }
   });
 };
+
+// NOTE: the legacy `createThumbnailToBase64` helper was removed on purpose.
+// Thumbnails are display-only and must never be materialised as base64; the only
+// base64 conversions that remain in the codebase happen when a Blob is handed to
+// the generation API (`blobToBase64` in App.tsx).
