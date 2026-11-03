@@ -269,21 +269,20 @@ export async function requestStoragePersistence(): Promise<boolean> {
 
 
 /**
- * Downscale any image source (Data URL / remote URL / Blob) into a Blob.
+ * Shared downscale primitive (Blob in / Blob out, never base64).
  *
- * This is the single thumbnail primitive used across the app: thumbnails are
- * only ever needed for on-screen rendering (list / card / lightbox), so they
- * are produced as Blobs and displayed through Object URLs. Base64/Data URL
- * strings are therefore never generated for storage or display paths anymore,
- * which keeps memory flat and lets the browser decode/evict natively.
- *
- * Returns `null` when the source cannot be decoded (e.g. a CORS-tainted remote
- * image), so callers can fall back gracefully.
+ * Two renditions are derived from it:
+ *  - `createThumbnailBlob` -> 256px long edge, used **only** by the panorama
+ *    navigation surfaces (lightbox navigation strip / overview map).
+ *  - `createDisplayBlob`   -> 1600px long edge, used by the generation columns:
+ *    sources already within the cap are left untouched (returns `null` so the
+ *    caller keeps the original image).
  */
-export const createThumbnailBlob = async (
+const renderDownscaledBlob = async (
   input: string | Blob,
-  maxDim: number = 256,
-  quality: number = 0.6,
+  maxDim: number,
+  quality: number,
+  skipWhenNotLarger: boolean,
 ): Promise<Blob | null> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -297,8 +296,21 @@ export const createThumbnailBlob = async (
 
     img.onload = () => {
       try {
-        let width = img.width;
-        let height = img.height;
+        const srcWidth = img.naturalWidth || img.width;
+        const srcHeight = img.naturalHeight || img.height;
+        if (!srcWidth || !srcHeight) {
+          cleanup();
+          resolve(null);
+          return;
+        }
+        if (skipWhenNotLarger && Math.max(srcWidth, srcHeight) <= maxDim) {
+          // Source is already within the cap -> nothing to resample.
+          cleanup();
+          resolve(null);
+          return;
+        }
+        let width = srcWidth;
+        let height = srcHeight;
         if (width > maxDim || height > maxDim) {
           if (width > height) {
             height = Math.round((height * maxDim) / width);
@@ -329,7 +341,7 @@ export const createThumbnailBlob = async (
           quality,
         );
       } catch (err) {
-        // Canvas taint / decode issues -> no thumbnail, caller falls back.
+        // Canvas taint / decode issues -> no rendition, caller falls back.
         cleanup();
         resolve(null);
       }
@@ -348,6 +360,29 @@ export const createThumbnailBlob = async (
     }
   });
 };
+
+/**
+ * 缩略图（最长边 256px、JPEG q0.6）：**仅用于全景导航视图**
+ * （灯箱导航条 / 图片地图总览），不是生图列的显示源。
+ */
+export const createThumbnailBlob = async (
+  input: string | Blob,
+  maxDim: number = 256,
+  quality: number = 0.6,
+): Promise<Blob | null> =>
+  renderDownscaledBlob(input, maxDim, quality, false);
+
+/**
+ * 生图列显示图：最长边限制为 `maxDim`（默认 1600px）。
+ *
+ * 原图本身最长边不超过上限时不做重采样，返回 `null`，调用方直接显示原图。
+ */
+export const createDisplayBlob = async (
+  input: string | Blob,
+  maxDim: number = 1600,
+  quality: number = 0.8,
+): Promise<Blob | null> =>
+  renderDownscaledBlob(input, maxDim, quality, true);
 
 // NOTE: the legacy `createThumbnailToBase64` helper was removed on purpose.
 // Thumbnails are display-only and must never be materialised as base64; the only

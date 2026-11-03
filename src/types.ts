@@ -61,6 +61,24 @@ export interface GenerationItem {
   downloadedUrls?: string[];
 }
 
+/**
+ * 生成结果中单张图片的渲染载荷。
+ *
+ * 三类载荷用途严格区分：
+ *  - `url`：全尺寸原图 Blob（灯箱主视图 / 下载 / 发往模型时才转 base64）。
+ *  - `display_url`：最长边 1600px 的显示图 Blob，供生图列渲染；原图最长边
+ *    本身不超过 1600px 时不生成该字段，卡片回退到 `url`。
+ *  - `thumbnail_url` / `thumbnail_url_1k`：256px / 2560px 缩略图 Blob，
+ *    仅用于全景导航视图（灯箱底部导航条、图片地图总览），不作生图列显示源。
+ */
+export interface GeneratedImage {
+  url: string | Blob;
+  display_url?: string | Blob;
+  thumbnail_url?: string | Blob;
+  thumbnail_url_1k?: string | Blob;
+  revised_prompt?: string;
+}
+
 export interface ImageReference {
   id: string; // Persistent ID for @ referencing (e.g., "1", "2", "3")
   url: string | Blob; // Base64, image URL, or Blob

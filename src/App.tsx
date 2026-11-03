@@ -13,6 +13,7 @@ import {
   blobToBase64,
 requestStoragePersistence,
   createThumbnailBlob,
+  createDisplayBlob,
 } from "./utils/db";
 import { getCachedBlobUrl } from "./utils/blobUrlCache";
 import { SmartImage } from "./components/SmartImage";
@@ -542,6 +543,7 @@ const autoRepairWorkspaces = (raw: any[]): ImageWorkspace[] => {
                     if (imgItem.url) {
                       cleanData.push({
                         url: imgItem.url,
+                        display_url: imgItem.display_url || undefined,
                         thumbnail_url: imgItem.thumbnail_url || undefined,
                         thumbnail_url_1k: imgItem.thumbnail_url_1k || undefined,
                         revised_prompt: imgItem.revised_prompt || undefined,
@@ -590,9 +592,11 @@ const getTrimmedWorkspacesForBackup = (
 //
 // The images are bundled locally under `public/perf-samples` and rendered into
 // Blobs that mirror the real generation pipeline: a full-size `url` Blob at the
-// generation resolution, a 256px `thumbnail_url` Blob, and (for 4K only) a
-// 2560px `thumbnail_url_1k` Blob. Nothing here touches the network and nothing
-// is stored as base64.
+// generation resolution, a 1600px `display_url` Blob for the generation columns
+// (skipped when the source already fits the cap), a 256px `thumbnail_url` Blob
+// reserved for the panorama navigation surfaces, and (for 4K only) a 2560px
+// `thumbnail_url_1k` Blob. Nothing here touches the network and nothing is
+// stored as base64.
 // ---------------------------------------------------------------------------
 // 性能测试项目仅在开发模式下启用：该编译期常量由 vite.config.ts 的 define 注入，
 // dev 服务器下为 true，生产构建（vite build）下为 false 并被摇树移除，
@@ -602,7 +606,7 @@ declare const __PERF_TEST_FIXTURE__: boolean;
 const PERF_TEST_COLUMNS = 100;
 const PERF_TEST_IMAGES_PER_COLUMN = 10;
 const PERF_SAMPLE_COUNT = 6;
-const PERF_DATA_VERSION = 2;
+const PERF_DATA_VERSION = 3;
 
 type PerfTier = "1k" | "2k" | "4k";
 
@@ -705,6 +709,7 @@ const generatePerfTestWorkspaces = async (): Promise<ImageWorkspace[]> => {
   //    plus its thumbnails. Every card reuses the same Blob objects, so the
   //    IndexedDB payload stays realistic without duplicating bytes.
   const fullCache = new Map<string, Blob | null>();
+  const displayCache = new Map<string, Blob | null>();
   const thumbCache = new Map<string, Blob | null>();
   for (let sample = 0; sample < bitmaps.length; sample++) {
     for (const tier of ["1k", "2k", "4k"] as PerfTier[]) {
@@ -718,6 +723,12 @@ const generatePerfTestWorkspaces = async (): Promise<ImageWorkspace[]> => {
       fullCache.set(`${sample}:${tier}`, full);
       await yieldToBrowser();
       if (full) {
+        // 生成列显示图（最长边 1600px）：返回 null 表示原图已在档内，列里直接显示 url。
+        displayCache.set(
+          `${sample}:${tier}`,
+          await createDisplayBlob(full, 1600),
+        );
+        await yieldToBrowser();
         thumbCache.set(
           `${sample}:${tier}`,
           await createThumbnailBlob(full, 256),
@@ -745,6 +756,7 @@ const generatePerfTestWorkspaces = async (): Promise<ImageWorkspace[]> => {
       const sample = (imgNum - 1) % bitmaps.length;
       const full = fullCache.get(`${sample}:${tier}`) ?? null;
       const thumb = thumbCache.get(`${sample}:${tier}`) ?? null;
+      const display = displayCache.get(`${sample}:${tier}`) ?? null;
       const thumb1k =
         tier === "4k" ? thumbCache.get(`${sample}:${tier}:1k`) ?? null : null;
 
@@ -765,6 +777,7 @@ const generatePerfTestWorkspaces = async (): Promise<ImageWorkspace[]> => {
               data: [
                 {
                   url: full,
+                  display_url: display ?? undefined,
                   thumbnail_url: thumb ?? undefined,
                   thumbnail_url_1k: thumb1k ?? undefined,
                 },
@@ -792,6 +805,10 @@ const generatePerfTestWorkspaces = async (): Promise<ImageWorkspace[]> => {
 
   return list;
 };
+
+// 项目切换 / 页面刷新时的“最短加载展示时长”。IndexedDB 读取往往是秒回，
+// 若不做下限约束，加载态会一闪而过（视觉上等同没有加载过程）。
+const MIN_PROJECT_LOAD_MS = 1000;
 
 
 export default function App() {
@@ -2905,6 +2922,8 @@ export default function App() {
   const isActualLoading = isDbLoading || activeProjectId !== loadedProjectId;
   const isViewportShowing = !isActualLoading && isScrollRestored;
   const [isProjectsLoaded, setIsProjectsLoaded] = useState(false);
+  // 加载态的最短展示与并发保护：runId 用于让被更新的加载任务作废旧任务的收尾。
+  const loadRunIdRef = useRef<number>(0);
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [isSettingsDropdownOpen, setIsSettingsDropdownOpen] = useState(false);
   const [editingProjId, setEditingProjId] = useState<string | null>(null);
@@ -3030,6 +3049,18 @@ export default function App() {
               await setIndexedDBItem("img_studio_projects_v2", loadedProjects);
             }
           }
+        } else {
+          // 生产环境兜底：丢弃历史遗留的性能测试项目，避免其在正式环境被加载或激活。
+          const nonPerfProjects = loadedProjects.filter(
+            (p) => !p.id.startsWith("perf-test-"),
+          );
+          if (nonPerfProjects.length !== loadedProjects.length) {
+            loadedProjects =
+              nonPerfProjects.length > 0
+                ? nonPerfProjects
+                : [{ id: "default", name: "默认项目", createdAt: Date.now() }];
+            await setIndexedDBItem("img_studio_projects_v2", loadedProjects);
+          }
         }
 
         if (
@@ -3064,6 +3095,8 @@ export default function App() {
     if (!isProjectsLoaded || !activeProjectId) return;
 
     async function loadActiveWorkspaces() {
+      const runId = ++loadRunIdRef.current;
+      const runStartedAt = Date.now();
       setIsDbLoading(true);
       setIsDbWriteLocked(false); // Reset database write protection on new project load
       setWorkspaces([]); // Clear workspaces immediately to prevent exit transition overlap when new project loads!
@@ -3153,42 +3186,46 @@ export default function App() {
           }
         }
 
-        // If this is the performance test project and the data is missing, incomplete,
-        // or was produced by an older fixture version, (re)generate 100 columns & 1000 images.
-        // 性能测试夹具也只在开发模式下生成/重建
-        const isPerfProj =
-          __PERF_TEST_FIXTURE__ &&
-          (activeProjectId === "perf-test-100x10" || activeProjectId === "perf-test-10x1000" || activeProjectId === "perf-test-10x100");
-        const perfVersionKey = `img_studio_perf_version_${activeProjectId}`;
-        const storedPerfVersion = isPerfProj
-          ? await getIndexedDBItem<number>(perfVersionKey)
-          : null;
-        const isPerfStale = isPerfProj && storedPerfVersion !== PERF_DATA_VERSION;
-        const isPerfIncomplete =
-          isPerfProj &&
-          (isPerfStale ||
-            !dbWorkspaces ||
-            !Array.isArray(dbWorkspaces) ||
-            dbWorkspaces.length < 100);
+        if (__PERF_TEST_FIXTURE__) {
+          // If this is the performance test project and the data is missing, incomplete,
+          // or was produced by an older fixture version, (re)generate 100 columns & 1000 images.
+          // 性能测试夹具只在开发模式下生成/重建；生产构建会整块剔除本段。
+          const isPerfProj =
+            activeProjectId === "perf-test-100x10" ||
+            activeProjectId === "perf-test-10x1000" ||
+            activeProjectId === "perf-test-10x100";
+          const perfVersionKey = `img_studio_perf_version_${activeProjectId}`;
+          const storedPerfVersion = isPerfProj
+            ? await getIndexedDBItem<number>(perfVersionKey)
+            : null;
+          const isPerfStale =
+            isPerfProj && storedPerfVersion !== PERF_DATA_VERSION;
+          const isPerfIncomplete =
+            isPerfProj &&
+            (isPerfStale ||
+              !dbWorkspaces ||
+              !Array.isArray(dbWorkspaces) ||
+              dbWorkspaces.length < 100);
 
-        if (isPerfIncomplete) {
-          const perfDefaults = await generatePerfTestWorkspaces();
-          if (Array.isArray(perfDefaults) && perfDefaults.length > 0) {
-            dbWorkspaces = perfDefaults;
-            try {
-              await setIndexedDBItem(wsKey, perfDefaults);
-              await setIndexedDBItem(
-                backupKey,
-                getTrimmedWorkspacesForBackup(perfDefaults),
+          if (isPerfIncomplete) {
+            const perfDefaults = await generatePerfTestWorkspaces();
+            if (Array.isArray(perfDefaults) && perfDefaults.length > 0) {
+              dbWorkspaces = perfDefaults;
+              try {
+                await setIndexedDBItem(wsKey, perfDefaults);
+                await setIndexedDBItem(
+                  backupKey,
+                  getTrimmedWorkspacesForBackup(perfDefaults),
+                );
+                await setIndexedDBItem(perfVersionKey, PERF_DATA_VERSION);
+              } catch (wErr) {
+                console.warn("Failed to write perf test workspaces:", wErr);
+              }
+            } else {
+              console.warn(
+                "Perf fixture produced no data; keeping the existing workspaces.",
               );
-              await setIndexedDBItem(perfVersionKey, PERF_DATA_VERSION);
-            } catch (wErr) {
-              console.warn("Failed to write perf test workspaces:", wErr);
             }
-          } else {
-            console.warn(
-              "Perf fixture produced no data; keeping the existing workspaces.",
-            );
           }
         }
 
@@ -3318,7 +3355,15 @@ export default function App() {
         console.error("Fatal exception in loadActiveWorkspaces:", globalErr);
         setIsDbWriteLocked(true);
       } finally {
+        // 已被更新的加载任务接管时，放弃本次收尾，避免提前收起加载态。
+        if (loadRunIdRef.current !== runId) return;
         setLoadedProjectId(activeProjectId);
+        // 加载态最短展示下限：不足则补齐，保证“切换项目 / 刷新页面”都有可见的加载过程。
+        const remainMs = MIN_PROJECT_LOAD_MS - (Date.now() - runStartedAt);
+        if (remainMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remainMs));
+        }
+        if (loadRunIdRef.current !== runId) return;
         setIsDbLoading(false);
       }
     }
@@ -3393,6 +3438,13 @@ export default function App() {
             }),
           );
 
+          // 连续等两帧：让浏览器完成恢复后的一次布局与绘制，
+          // 保证加载态收起时画面已经排好版，不再出现跳变。
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => resolve()),
+            ),
+          );
           centeredProjectRef.current = activeProjectId;
           setIsScrollRestored(true);
         } else {
@@ -6447,6 +6499,8 @@ export default function App() {
               const blob = await base64ToBlob(fullB64);
               // Thumbnails are display-only: keep them as Blobs (rendered via
               // Object URLs) so no base64 ever enters state / IndexedDB.
+              // 生成列显示图：最长边 1600px；undefined 表示原图已不大于 1600，卡片回退显示 url。
+              const display = (await createDisplayBlob(blob)) || undefined;
               const thumb = (await createThumbnailBlob(blob)) || undefined;
               const thumb1k =
                 resolutionToUse === "4k"
@@ -6455,6 +6509,7 @@ export default function App() {
               return {
                 ...img,
                 url: blob,
+                display_url: display,
                 thumbnail_url: thumb,
                 thumbnail_url_1k: thumb1k,
               };
@@ -6468,6 +6523,8 @@ export default function App() {
                 // Use fetchBlobWithAuth to ensure Authorization header is passed and CORS is bypassed correctly
                 const fetchedBlob = await localFetchBlobWithAuth(processedUrl);
                 // Thumbnails are display-only Blobs (see note in the b64 branch).
+                // 生成列显示图：最长边 1600px；undefined 表示原图已不大于 1600，卡片回退显示 url。
+                const display = (await createDisplayBlob(fetchedBlob)) || undefined;
                 const thumb = (await createThumbnailBlob(fetchedBlob)) || undefined;
                 const thumb1k =
                   resolutionToUse === "4k"
@@ -6476,6 +6533,7 @@ export default function App() {
                 return {
                   ...img,
                   url: fetchedBlob,
+                  display_url: display,
                   thumbnail_url: thumb,
                   thumbnail_url_1k: thumb1k,
                 };
@@ -6501,6 +6559,8 @@ export default function App() {
             ) {
                 const blob = await base64ToBlob(processedUrl);
               // Thumbnails are display-only Blobs (see note in the b64 branch).
+              // 生成列显示图：最长边 1600px；undefined 表示原图已不大于 1600，卡片回退显示 url。
+              const display = (await createDisplayBlob(blob)) || undefined;
               const thumb = (await createThumbnailBlob(blob)) || undefined;
               const thumb1k =
                 resolutionToUse === "4k"
@@ -6509,6 +6569,7 @@ export default function App() {
               return {
                 ...img,
                 url: blob,
+                display_url: display,
                 thumbnail_url: thumb,
                 thumbnail_url_1k: thumb1k,
               };
@@ -9094,6 +9155,7 @@ export default function App() {
                     gen: GenerationItem;
                     trackId: string;
                     url: string | Blob;
+                    display_url?: string | Blob;
                     thumbnail_url?: string | Blob;
                     thumbnail_url_1k?: string | Blob;
                     imgIndex: number;
@@ -9111,6 +9173,7 @@ export default function App() {
                                 url:
                                   img.url ||
                                   `data:image/png;base64,${img.b64_json}`,
+                                display_url: img.display_url,
                                 thumbnail_url: img.thumbnail_url,
                                 thumbnail_url_1k: img.thumbnail_url_1k,
                                 imgIndex: imgIdx,
@@ -9138,6 +9201,7 @@ export default function App() {
                               gen: g,
                               trackId: ws.id,
                               url,
+                              display_url: matchImg?.display_url,
                               thumbnail_url: matchImg?.thumbnail_url,
                               thumbnail_url_1k: matchImg?.thumbnail_url_1k,
                               imgIndex: imgIdx,
@@ -9297,11 +9361,7 @@ export default function App() {
                           }}
                         >
                           <SmartImage
-                            src={
-                              item.thumbnail_url ||
-                              item.thumbnail_url_1k ||
-                              item.url
-                            }
+                            src={item.display_url || item.url}
                             alt={`Gen ${idx}`}
                             data-track-id={item.trackId}
                             data-gen-id={item.gen.id}

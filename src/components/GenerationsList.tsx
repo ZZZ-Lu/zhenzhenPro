@@ -15,7 +15,7 @@ import {
   X,
   Palette,
 } from "lucide-react";
-import { GenerationItem, ImageReference } from "../types";
+import { GenerationItem, ImageReference, GeneratedImage } from "../types";
 import { SmartImage } from "./SmartImage";
 import { LazyImageWrapper } from "./LazyImageWrapper";
 import { getAspectRatioParams } from "../App";
@@ -228,16 +228,13 @@ export const GenerationsList = React.memo(
     return (
       <AnimatePresence initial={false}>
         {displayedGenerations.map((gen, gIdx) => {
-          const imageList: {
-            url: string | Blob;
-            thumbnail_url?: string | Blob;
-            thumbnail_url_1k?: string | Blob;
-          }[] = [];
+          const imageList: GeneratedImage[] = [];
           if (gen.status === "success" && gen.result?.data) {
             gen.result.data.forEach((item: any) => {
               if (item.url) {
                 imageList.push({
                   url: item.url,
+                  display_url: item.display_url,
                   thumbnail_url: item.thumbnail_url,
                   thumbnail_url_1k: item.thumbnail_url_1k,
                 });
@@ -490,11 +487,7 @@ export const GenerationsList = React.memo(
                     >
                       {imageList.map((imgItem, uidx) => {
                         const url = imgItem.url;
-                        const displayUrl =
-                          imgItem.thumbnail_url ||
-                          imgItem.thumbnail_url_1k ||
-                          (imgItem as any).thumbnail ||
-                          imgItem.url;
+                        const displayUrl = imgItem.display_url || imgItem.url;
 const isImageDownloaded =
                           typeof url === "string" &&
                           gen.downloadedUrls?.includes(url);

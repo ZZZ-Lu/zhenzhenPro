@@ -15,7 +15,7 @@ import {
   X,
   Palette,
 } from "lucide-react";
-import { GenerationItem } from "../types";
+import { GenerationItem, GeneratedImage } from "../types";
 import { SmartImage } from "./SmartImage";
 import { LazyImageWrapper } from "./LazyImageWrapper";
 import { getAspectRatioParams } from "../App";
@@ -237,16 +237,13 @@ export const GenerationCardItem = React.memo(
       );
     }
 
-    const imageList: {
-      url: string | Blob;
-      thumbnail_url?: string | Blob;
-      thumbnail_url_1k?: string | Blob;
-    }[] = [];
+    const imageList: GeneratedImage[] = [];
     if (gen.status === "success" && gen.result?.data) {
       gen.result.data.forEach((item: any) => {
         if (item.url) {
           imageList.push({
             url: item.url,
+            display_url: item.display_url,
             thumbnail_url: item.thumbnail_url,
             thumbnail_url_1k: item.thumbnail_url_1k,
           });
@@ -500,11 +497,8 @@ export const GenerationCardItem = React.memo(
               >
                 {imageList.map((imgItem, uidx) => {
                   const url = imgItem.url;
-                  // Priority: 1k thumbnail -> 512px thumbnail -> original blob/url
-                  const displayUrl =
-                    imgItem.thumbnail_url_1k ||
-                    imgItem.thumbnail_url ||
-                    imgItem.url;
+                  // 卡片显示源：1600px 显示图 -> 原图；缩略图只服务全景导航视图。
+                  const displayUrl = imgItem.display_url || imgItem.url;
                   const isImageDownloaded =
                     typeof url === "string" &&
                     gen.downloadedUrls?.includes(url);
