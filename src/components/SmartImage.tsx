@@ -1,10 +1,24 @@
-import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  forwardRef,
+  useImperativeHandle,
+} from "react";
 import { getCachedBlobUrl } from "../utils/blobUrlCache";
+import { useGatedImageUrl } from "../utils/imageLoadGate";
 
-// Display URLs whose bytes are already decoded in this session. Remounting one
-// of these (e.g. scrolling back to an already-seen column) must be instant, so
-// it skips the reveal fade entirely.
-const decodedUrls = new Set<string>();
+// ---------------------------------------------------------------------------
+// 直接渲染的图片元素（已移除自定义优化）。
+//
+// 之前：维护「本会话已解码 URL」集合以跳过揭幕动画，并用 reveal 状态机接管淡入
+// 动画的生命周期（动画结束即摘除，避免占用合成层）。
+// 现在：直接挂载 <img>，加载完成即显示；不再维护已解码集合，也不做动画接管。
+//
+// 保留 getCachedBlobUrl：它不只是缓存，更是全应用「同一 Blob 对应同一 URL」的
+// 身份契约——多处用 data-url / data-lightbox-wrapper 做元素查找与比对，去掉会破坏
+// 灯箱定位、跳转到指定图与拖拽等功能，因此按「只保留功能」的原则原样保留。
+// ---------------------------------------------------------------------------
 
 interface SmartImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   src: string | Blob;
@@ -12,72 +26,59 @@ interface SmartImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
 }
 
 export const SmartImage = forwardRef<HTMLImageElement, SmartImageProps>(
-  ({ src, className = "", onLoad, onAnimationEnd, asyncDecode = true, loading = "lazy", style, ...props }, ref) => {
+  (
+    {
+      src,
+      className = "",
+      onLoad,
+      onAnimationEnd,
+      asyncDecode: _asyncDecode,
+      loading = "eager",
+      style,
+      ...props
+    },
+    ref,
+  ) => {
     const internalRef = useRef<HTMLImageElement | null>(null);
     useImperativeHandle(ref, () => internalRef.current!);
 
     const displayUrl = getCachedBlobUrl(src);
 
-    // Deliberately no `new Image()` probe here anymore: it created a second
-    // Image object and kicked off a duplicate decode of the same source on
-    // every mount, which is costly when a board mounts many images at once.
-    // `<img onLoad>` plus the completeness check in the effect below cover the
-    // same "already cached" case.
-    //
-    // `loaded` drives visibility. `reveal` is armed only when this mount really
-    // waited for the bytes: an image already decoded in this session starts out
-    // `loaded` with `reveal` still false, so scrolling back to it stays instant
-    // instead of replaying the fade. The reveal itself is a keyframe animation
-    // (see `.image-reveal` in index.css) because a class-based transition would
-    // be cancelled by the `transition-transform` utility the card hover styles
-    // put on the very same element.
-    const [imgState, setImgState] = useState(() => ({
-      loaded: displayUrl ? decodedUrls.has(displayUrl) : false,
-      reveal: false,
-    }));
+    // 图片加载闸门：只有被放行的图片才挂上 src，放行速率受每帧/每秒配额约束（滚动期收紧、
+    // 停下后放宽补齐）；同时已加载张数超上限时，最远优先释放、视口内的永不释放。
+    // 见 src/utils/imageLoadGate.ts。放行前 src 为空，图片保持透明，露出容器底色。
+    const gatedUrl = useGatedImageUrl(displayUrl || null, internalRef);
 
-    const markLoaded = () => {
-      setImgState((s) => (s.loaded ? s : { loaded: true, reveal: true }));
-    };
-
+    const [loaded, setLoaded] = useState(false);
     const prevDisplayUrlRef = useRef<string>(displayUrl);
 
     useEffect(() => {
-      // Only reset state if displayUrl actually changed
       if (prevDisplayUrlRef.current !== displayUrl) {
         prevDisplayUrlRef.current = displayUrl;
-        setImgState({
-          loaded: displayUrl ? decodedUrls.has(displayUrl) : false,
-          reveal: false,
-        });
+        setLoaded(false);
       }
-
-      if (internalRef.current && internalRef.current.complete && internalRef.current.naturalWidth > 0) {
-        markLoaded();
-      }
+      const el = internalRef.current;
+      if (el && el.complete && el.naturalWidth > 0) setLoaded(true);
     }, [displayUrl]);
+
+    // 被闸门释放（src 被置空）时回到未加载态，避免残留一个透明的“已加载”空图
+    useEffect(() => {
+      if (!gatedUrl) setLoaded(false);
+    }, [gatedUrl]);
 
     if (!displayUrl) return null;
 
     return (
       <img
         ref={internalRef}
-        src={displayUrl}
+        src={gatedUrl ?? undefined}
         decoding="async"
         loading={loading}
         onLoad={(e) => {
-          if (displayUrl) decodedUrls.add(displayUrl);
-          markLoaded();
+          setLoaded(true);
           if (onLoad) onLoad(e);
         }}
-        onAnimationEnd={(e) => {
-          // Release the reveal animation as soon as it has played: keeping it
-          // attached (with `fill-mode: both`) pins a composited layer to every
-          // revealed image for the rest of the session, which measurably costs
-          // frames while a board with hundreds of images is being scrolled.
-          setImgState((s) => (s.reveal ? { loaded: true, reveal: false } : s));
-          if (onAnimationEnd) onAnimationEnd(e);
-        }}
+        onAnimationEnd={onAnimationEnd}
         onContextMenu={(e) => {
           const isDev =
             typeof window !== "undefined" &&
@@ -91,12 +92,12 @@ export const SmartImage = forwardRef<HTMLImageElement, SmartImageProps>(
             props.onContextMenu(e);
           }
         }}
-        className={`${imgState.reveal ? "image-reveal " : ""}${className}`}
-        style={{ opacity: imgState.loaded ? 1 : 0, ...style }}
+        className={className}
+        style={{ opacity: loaded ? 1 : 0, ...style }}
         {...props}
       />
     );
-  }
+  },
 );
 
 SmartImage.displayName = "SmartImage";

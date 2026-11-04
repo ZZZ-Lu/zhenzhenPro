@@ -17,9 +17,11 @@ export const PerformanceMonitor: React.FC = () => {
     localStorage.setItem('PerformanceMonitor_expanded', isExpanded ? 'true' : 'false');
   }, [isExpanded]);
   
-  const recentOpsRef = useRef<string[]>([]);
+const recentOpsRef = useRef<string[]>([]);
   const frameCountRef = useRef(0);
   const lastFpsUpdateRef = useRef(performance.now());
+  // 长任务先在这里累加，由 500ms 心跳统一提交，避免每个长任务都触发一次渲染。
+  const pendingLagRef = useRef<PerformanceLagEvent[]>([]);
 
   // Capture image decoding events
   useEffect(() => {
@@ -119,7 +121,9 @@ export const PerformanceMonitor: React.FC = () => {
               timestamp: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
               recentOperations: [...recentOpsRef.current]
             };
-            setLagEvents(prev => [event, ...prev].slice(0, 40));
+            // 只累加、不渲染：卡顿时一次滚动可能产生 200+ 个长任务，逐个 setState
+            // 会让诊断面板自己变成新的抖动源。提交统一交给下面的 500ms 心跳。
+            pendingLagRef.current = [event, ...pendingLagRef.current].slice(0, 40);
           }
         }
       });
@@ -143,9 +147,14 @@ export const PerformanceMonitor: React.FC = () => {
     const checkFrame = (time: number) => {
       frameCountRef.current++;
       if (time - lastFpsUpdateRef.current > 500) {
-        setFps(Math.round((frameCountRef.current * 1000) / (time - lastFpsUpdateRef.current)));
+setFps(Math.round((frameCountRef.current * 1000) / (time - lastFpsUpdateRef.current)));
         frameCountRef.current = 0;
         lastFpsUpdateRef.current = time;
+        if (pendingLagRef.current.length) {
+          const batch = pendingLagRef.current;
+          pendingLagRef.current = [];
+          setLagEvents(prev => [...batch, ...prev].slice(0, 40));
+        }
       }
       rafId = requestAnimationFrame(checkFrame);
     };

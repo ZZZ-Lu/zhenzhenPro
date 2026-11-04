@@ -16,6 +16,17 @@ requestStoragePersistence,
   createDisplayBlob,
 } from "./utils/db";
 import { getCachedBlobUrl } from "./utils/blobUrlCache";
+import {
+  exportProjectArchive,
+  downloadBlob,
+  parseProjectArchive,
+  workspaceKey,
+  workspaceBackupKey,
+  globalRefsKey,
+  PROJECTS_KEY,
+  ACTIVE_PROJECT_KEY,
+  type ParsedProjectArchive,
+} from "./utils/projectTransfer";
 import { SmartImage } from "./components/SmartImage";
 import {
   Activity,
@@ -69,7 +80,8 @@ import {
   GripVertical,
   Star,
   GitCompare,
-  AlignHorizontalJustifyCenter,
+AlignHorizontalJustifyCenter,
+  Upload,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { SharpStar } from "./components/SharpStar";
@@ -97,6 +109,7 @@ import {
   updateSystemStatus,
   sendDesktopNotification,
 } from "./utils/notifications";
+import { measureWithIsolationSafe } from "./utils/renderIsolation";
 
 const playSound = (type: "success" | "error") => {
   try {
@@ -1013,7 +1026,30 @@ export default function App() {
           if (finishedEl) candidateSet.add(finishedEl);
         });
 
-        if (candidateSet.size === 0 && indicators.length === 0) return;
+if (candidateSet.size === 0 && indicators.length === 0) return;
+
+        // 被隔离（content-visibility: auto 跳过布局）的列/卡片没有布局盒，直接读 rect
+        // 会得到全 0 矩形，会让「离屏生成指示器」失效。这里先统一临时解除相关容器的
+        // 隔离、一次性读完几何，再还原——生成中/刚完成的卡片通常只有个位数，成本可控。
+        const cardGeometry = measureWithIsolationSafe(
+          Array.from(candidateSet),
+          () => {
+            const measured = new Map<
+              Element,
+              { rect: DOMRect; columnRect: DOMRect | null }
+            >();
+            candidateSet.forEach((cardEl) => {
+              const columnEl = cardEl.closest(".overflow-y-auto");
+              measured.set(cardEl, {
+                rect: cardEl.getBoundingClientRect(),
+                columnRect: columnEl
+                  ? columnEl.getBoundingClientRect()
+                  : null,
+              });
+            });
+            return measured;
+          },
+        );
 
         candidateSet.forEach((cardEl) => {
           const genId = cardEl.getAttribute("data-gen-id");
@@ -1033,12 +1069,10 @@ export default function App() {
             }
           }
 
-          if (isActive) {
-            const rect = cardEl.getBoundingClientRect();
-            const columnEl = cardEl.closest(".overflow-y-auto");
-            const columnRect = columnEl
-              ? columnEl.getBoundingClientRect()
-              : null;
+if (isActive) {
+            const measuredGeom = cardGeometry.get(cardEl);
+            const rect = measuredGeom?.rect ?? cardEl.getBoundingClientRect();
+            const columnRect = measuredGeom?.columnRect ?? null;
 
             // Calculate center of the card
             const cardCenterX = rect.left + rect.width / 2;
@@ -2426,9 +2460,29 @@ export default function App() {
             (el) => el.getAttribute("data-lightbox-wrapper") === targetUrlKey,
           );
 
-        if (targetEl) {
-          const viewportRect = trackViewport.getBoundingClientRect();
-          const thumbRect = targetEl.getBoundingClientRect();
+if (targetEl) {
+          const colScrollContainer: HTMLElement | null = trackId
+            ? document.getElementById(`track-scroll-container-${trackId}`)
+            : null;
+
+          // 目标缩略图与列滚动容器都可能落在被隔离（content-visibility: auto 跳过布局）
+          // 的列里，此时直接读 rect / scrollHeight 会得到全 0。统一临时解除隔离后再读，
+          // 读完立即还原，保证「跳转到指定图」的定位不受隔离影响。
+          const geo = measureWithIsolationSafe(
+            [targetEl, colScrollContainer],
+            () => ({
+              viewportRect: trackViewport.getBoundingClientRect(),
+              thumbRect: targetEl.getBoundingClientRect(),
+              colScrollRect: colScrollContainer
+                ? colScrollContainer.getBoundingClientRect()
+                : null,
+              colScrollHeight: colScrollContainer
+                ? colScrollContainer.scrollHeight
+                : 0,
+            }),
+          );
+          const viewportRect = geo.viewportRect;
+          const thumbRect = geo.thumbRect;
 
           const absLeft =
             thumbRect.left - viewportRect.left + trackViewport.scrollLeft;
@@ -2441,23 +2495,16 @@ export default function App() {
           );
 
           let finalScrollTop: number | null = null;
-          let colScrollContainer: HTMLElement | null = null;
-          if (trackId) {
-            colScrollContainer = document.getElementById(
-              `track-scroll-container-${trackId}`,
-            );
-            if (colScrollContainer) {
-              const colScrollRect = colScrollContainer.getBoundingClientRect();
-              const absTop =
-                thumbRect.top -
-                colScrollRect.top +
-                colScrollContainer.scrollTop;
-              const targetTop =
-                absTop - colScrollRect.height / 2 + thumbRect.height / 2;
-              const maxScrollTop =
-                colScrollContainer.scrollHeight - colScrollRect.height;
-              finalScrollTop = Math.max(0, Math.min(maxScrollTop, targetTop));
-            }
+          if (colScrollContainer && geo.colScrollRect) {
+            const colScrollRect = geo.colScrollRect;
+            const absTop =
+              thumbRect.top -
+              colScrollRect.top +
+              colScrollContainer.scrollTop;
+            const targetTop =
+              absTop - colScrollRect.height / 2 + thumbRect.height / 2;
+            const maxScrollTop = geo.colScrollHeight - colScrollRect.height;
+            finalScrollTop = Math.max(0, Math.min(maxScrollTop, targetTop));
           }
 
           customSmoothScroll(
@@ -2479,14 +2526,34 @@ export default function App() {
           const genCardEl = document.getElementById(
             `gen-card-${targetImg.gen.id}`,
           );
-          if (genCardEl) {
+if (genCardEl) {
             const columnEl = trackId
               ? document.getElementById(`track-container-${trackId}`)
               : null;
             const targetCol = columnEl || genCardEl;
 
-            const viewportRect = trackViewport.getBoundingClientRect();
-            const colRect = targetCol.getBoundingClientRect();
+            const colScrollContainer: HTMLElement | null = trackId
+              ? document.getElementById(`track-scroll-container-${trackId}`)
+              : null;
+
+            // 与上一个分支同理：目标卡片与列滚动容器可能落在被隔离（跳过布局）的列里，
+            // 读几何前统一临时解除隔离，读完立即还原。
+            const geo = measureWithIsolationSafe(
+              [targetCol, genCardEl, colScrollContainer],
+              () => ({
+                viewportRect: trackViewport.getBoundingClientRect(),
+                colRect: targetCol.getBoundingClientRect(),
+                cardRect: genCardEl.getBoundingClientRect(),
+                colScrollRect: colScrollContainer
+                  ? colScrollContainer.getBoundingClientRect()
+                  : null,
+                colScrollHeight: colScrollContainer
+                  ? colScrollContainer.scrollHeight
+                  : 0,
+              }),
+            );
+            const viewportRect = geo.viewportRect;
+            const colRect = geo.colRect;
             const absLeft =
               colRect.left - viewportRect.left + trackViewport.scrollLeft;
             const targetLeft =
@@ -2500,26 +2567,19 @@ export default function App() {
             );
 
             let finalScrollTop: number | null = null;
-            let colScrollContainer: HTMLElement | null = null;
-            if (trackId) {
-              colScrollContainer = document.getElementById(
-                `track-scroll-container-${trackId}`,
-              );
-              if (colScrollContainer) {
-                const colScrollRect =
-                  colScrollContainer.getBoundingClientRect();
-                const cardRect = genCardEl.getBoundingClientRect();
-                const absTop =
-                  cardRect.top -
-                  colScrollRect.top +
-                  colScrollContainer.scrollTop;
-                const targetTop =
-                  absTop - colScrollRect.height / 2 + cardRect.height / 2;
+            if (colScrollContainer && geo.colScrollRect) {
+              const colScrollRect = geo.colScrollRect;
+              const cardRect = geo.cardRect;
+              const absTop =
+                cardRect.top -
+                colScrollRect.top +
+                colScrollContainer.scrollTop;
+              const targetTop =
+                absTop - colScrollRect.height / 2 + cardRect.height / 2;
 
-                const maxScrollTop =
-                  colScrollContainer.scrollHeight - colScrollRect.height;
-                finalScrollTop = Math.max(0, Math.min(maxScrollTop, targetTop));
-              }
+              const maxScrollTop =
+                geo.colScrollHeight - colScrollRect.height;
+              finalScrollTop = Math.max(0, Math.min(maxScrollTop, targetTop));
             }
 
             customSmoothScroll(
@@ -2931,7 +2991,15 @@ export default function App() {
   const [deletingProjId, setDeletingProjId] = useState<string | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const settingsDropdownRef = useRef<HTMLDivElement>(null);
-  const [globalReferenceImages, setGlobalReferenceImages] = useState<ImageReference[]>([]);
+const [globalReferenceImages, setGlobalReferenceImages] = useState<ImageReference[]>([]);
+
+  // --- 单项目数据导出 / 导入 ---
+  const [transferBusy, setTransferBusy] = useState<string | null>(null);
+  const [pendingImport, setPendingImport] = useState<{
+    fileName: string;
+    parsed: ParsedProjectArchive;
+  } | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isSettingsLoaded && !isActualLoading && activeProjectId) {
@@ -3872,7 +3940,170 @@ export default function App() {
         (e) => console.warn("Failed to save active project to IndexedDB:", e),
       );
     }
-  }, [projects, activeProjectId, isProjectsLoaded, isDbWriteLocked]);
+}, [projects, activeProjectId, isProjectsLoaded, isDbWriteLocked]);
+
+  // -------------------------------------------------------------------------
+  // 单项目数据导出 / 导入
+  // -------------------------------------------------------------------------
+
+  /** 导出单个项目（当前激活项目取内存中最新的状态，其余项目从 IndexedDB 读取）。 */
+  const handleExportProject = useCallback(
+    async (projId: string) => {
+      if (!isProjectsLoaded) {
+        setToast("数据尚未加载完成，请稍后再试");
+        return;
+      }
+      const proj = projects.find((p) => p.id === projId);
+      if (!proj) {
+        setToast("未找到该项目");
+        return;
+      }
+      setTransferBusy(`正在导出「${proj.name}」…`);
+      try {
+        let wsList: ImageWorkspace[] = [];
+        if (projId === activeProjectId) {
+          wsList = workspaces;
+        } else {
+          const stored = await getIndexedDBItem<ImageWorkspace[]>(
+            workspaceKey(projId),
+          );
+          wsList = Array.isArray(stored) ? stored : [];
+        }
+
+        let refs: ImageReference[] = [];
+        if (projId === activeProjectId) {
+          refs = globalReferenceImages;
+        } else {
+          const stored = await getIndexedDBItem<ImageReference[]>(
+            globalRefsKey(projId),
+          );
+          refs = Array.isArray(stored) ? stored : [];
+        }
+
+        const result = await exportProjectArchive({
+          project: { id: proj.id, name: proj.name, createdAt: proj.createdAt },
+          workspaces: wsList,
+          globalRefs: refs,
+        });
+        downloadBlob(result.blob, result.fileName);
+        setToast(
+          `已导出「${proj.name}」：${result.workspaceCount} 列 / ${result.assetCount} 个图片资源`,
+        );
+      } catch (err) {
+        console.error("导出项目失败：", err);
+        setToast(
+          `导出失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setTransferBusy(null);
+      }
+    },
+    [
+      activeProjectId,
+      globalReferenceImages,
+      isProjectsLoaded,
+      projects,
+      setToast,
+      workspaces,
+    ],
+  );
+
+  /** 选择导入文件并解析（解析阶段只读，不触碰现有数据）。 */
+  const handleImportFileSelected = useCallback(
+    async (file: File | null | undefined) => {
+      if (!file) return;
+      setTransferBusy(`正在解析「${file.name}」…`);
+      try {
+        const parsed = await parseProjectArchive(file);
+        setPendingImport({ fileName: file.name, parsed });
+      } catch (err) {
+        console.error("解析项目数据包失败：", err);
+        setToast(
+          `导入失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setTransferBusy(null);
+      }
+    },
+    [setToast],
+  );
+
+  /** 确认导入：把解析结果写入 IndexedDB 与界面状态。 */
+  const handleConfirmImport = useCallback(
+    async (strategy: "overwrite" | "copy") => {
+      if (!pendingImport) return;
+      const { parsed } = pendingImport;
+      const conflict = projects.some((p) => p.id === parsed.project.id);
+      const useOriginal = !conflict || strategy === "overwrite";
+      const targetId = useOriginal
+        ? parsed.project.id
+        : `${parsed.project.id}-import-${Date.now()}`;
+      const targetName = useOriginal
+        ? parsed.project.name
+        : `${parsed.project.name}（导入副本）`;
+
+      setTransferBusy(`正在导入「${targetName}」…`);
+      try {
+        await setIndexedDBItem(workspaceKey(targetId), parsed.workspaces);
+        await setIndexedDBItem(
+          workspaceBackupKey(targetId),
+          getTrimmedWorkspacesForBackup(parsed.workspaces),
+        );
+        await setIndexedDBItem(globalRefsKey(targetId), parsed.globalRefs);
+
+        const existsIdx = projects.findIndex((p) => p.id === targetId);
+        const nextProjects =
+          existsIdx >= 0
+            ? projects.map((p, i) =>
+                i === existsIdx ? { ...p, name: targetName } : p,
+              )
+            : [
+                ...projects,
+                {
+                  id: targetId,
+                  name: targetName,
+                  createdAt: parsed.project.createdAt,
+                },
+              ];
+        setProjects(nextProjects);
+        await setIndexedDBItem(PROJECTS_KEY, nextProjects);
+
+        // 覆盖「当前激活项目」时，加载副作用不会重跑（activeProjectId 未变化），
+        // 必须直接把内存状态替换为导入数据，否则随后的自动保存会把导入结果覆盖回去。
+        if (targetId === activeProjectId) {
+          setWorkspaces(parsed.workspaces);
+          setGlobalReferenceImages(parsed.globalRefs);
+        }
+
+        setActiveProjectId(targetId);
+        await setIndexedDBItem(ACTIVE_PROJECT_KEY, targetId);
+
+        setPendingImport(null);
+        setIsProjectDropdownOpen(false);
+        setToast(
+          `已导入「${targetName}」：${parsed.meta.workspaceCount} 列 / ${parsed.meta.generationCount} 条生成记录`,
+        );
+      } catch (err) {
+        console.error("导入项目失败：", err);
+        setToast(
+          `导入失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setTransferBusy(null);
+      }
+    },
+    [activeProjectId, pendingImport, projects, setToast],
+  );
+
+  /** 待导入数据与现有项目是否同 ID（决定是否提供“覆盖/导入副本”两个选项）。 */
+  const importConflictProject = useMemo(
+    () =>
+      pendingImport
+        ? (projects.find((p) => p.id === pendingImport.parsed.project.id) ??
+          null)
+        : null,
+    [pendingImport, projects],
+  );
 
   // Sync active model catalog on load
   useEffect(() => {
@@ -7492,39 +7723,55 @@ export default function App() {
                             </button>
                           )}
 
-                          {editingProjId !== proj.id &&
+{editingProjId !== proj.id &&
                             deletingProjId !== proj.id && (
-                              <div className="p-1 opacity-0 group-hover:opacity-100 transition-opacity flex items-center pr-2 gap-1 shrink-0">
+                              <>
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setEditingProjName(proj.name);
-                                    setEditingProjId(proj.id);
+                                    void handleExportProject(proj.id);
                                   }}
-                                  className={`transition-colors cursor-pointer ${
+                                  className={`p-1 mr-0.5 shrink-0 transition-colors cursor-pointer ${
                                     theme === "light"
-                                      ? "text-slate-400 hover:text-indigo-600"
-                                      : "text-slate-400 hover:text-indigo-400"
+                                      ? "text-slate-400 hover:text-emerald-600"
+                                      : "text-slate-400 hover:text-emerald-400"
                                   }`}
-                                  title="重命名项目"
+                                  title="导出该项目数据"
                                 >
-                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <Download className="w-3.5 h-3.5" />
                                 </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setDeletingProjId(proj.id);
-                                  }}
-                                  className={`transition-colors cursor-pointer ${
-                                    theme === "light"
-                                      ? "text-slate-400 hover:text-red-500"
-                                      : "text-slate-400 hover:text-red-400"
-                                  }`}
-                                  title="删除项目"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
+                                <div className="p-1 opacity-0 group-hover:opacity-100 transition-opacity flex items-center pr-2 gap-1 shrink-0">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingProjName(proj.name);
+                                      setEditingProjId(proj.id);
+                                    }}
+                                    className={`transition-colors cursor-pointer ${
+                                      theme === "light"
+                                        ? "text-slate-400 hover:text-indigo-600"
+                                        : "text-slate-400 hover:text-indigo-400"
+                                    }`}
+                                    title="重命名项目"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDeletingProjId(proj.id);
+                                    }}
+                                    className={`transition-colors cursor-pointer ${
+                                      theme === "light"
+                                        ? "text-slate-400 hover:text-red-500"
+                                        : "text-slate-400 hover:text-red-400"
+                                    }`}
+                                    title="删除项目"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </>
                             )}
                         </div>
                       ))}
@@ -7590,7 +7837,7 @@ export default function App() {
                           : "border-slate-700/80 bg-slate-850"
                       }`}
                     >
-                      <button
+<button
                         onClick={() => {
                           setEditingProjName("");
                           setEditingProjId("new");
@@ -7604,6 +7851,64 @@ export default function App() {
                         <Plus className="w-3.5 h-3.5" />
                         新建项目
                       </button>
+
+                      {/* 单项目数据导出 / 导入 */}
+                      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleExportProject(activeProjectId);
+                          }}
+                          disabled={!!transferBusy}
+                          className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                            theme === "light"
+                              ? "text-emerald-700 hover:text-white hover:bg-emerald-600 bg-emerald-50 border border-emerald-200"
+                              : "text-emerald-400 hover:text-white hover:bg-emerald-600 bg-emerald-500/10 border border-emerald-500/20"
+                          }`}
+                          title="把当前项目数据导出为文件"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          导出项目
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            importFileInputRef.current?.click();
+                          }}
+                          disabled={!!transferBusy}
+                          className={`flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-bold transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                            theme === "light"
+                              ? "text-sky-700 hover:text-white hover:bg-sky-600 bg-sky-50 border border-sky-200"
+                              : "text-sky-400 hover:text-white hover:bg-sky-600 bg-sky-500/10 border border-sky-500/20"
+                          }`}
+                          title="从导出的项目数据文件导入"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          导入项目
+                        </button>
+                      </div>
+                      <input
+                        ref={importFileInputRef}
+                        type="file"
+                        accept=".zip,.zzp,application/zip"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          e.target.value = "";
+                          void handleImportFileSelected(file);
+                        }}
+                      />
+                      {transferBusy && (
+                        <div
+                          className={`mt-1.5 text-[10px] text-center font-medium ${
+                            theme === "light"
+                              ? "text-slate-500"
+                              : "text-slate-400"
+                          }`}
+                        >
+                          {transferBusy}
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -9522,6 +9827,158 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+{/* 单项目导入确认 */}
+      <AnimatePresence>
+        {pendingImport && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-[99998] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+            onClick={() => {
+              if (!transferBusy) setPendingImport(null);
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.96 }}
+              transition={{ duration: 0.15 }}
+              onClick={(e) => e.stopPropagation()}
+              className={`w-full max-w-sm rounded-2xl shadow-2xl border p-5 ${
+                theme === "light"
+                  ? "bg-white border-slate-200"
+                  : "bg-slate-900 border-slate-700"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-full bg-sky-500/10 flex items-center justify-center shrink-0">
+                  <Upload className="w-4 h-4 text-sky-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3
+                    className={`text-sm font-bold ${
+                      theme === "light" ? "text-slate-800" : "text-slate-100"
+                    }`}
+                  >
+                    导入项目数据
+                  </h3>
+                  <p
+                    className={`mt-1 text-[11px] break-all ${
+                      theme === "light" ? "text-slate-500" : "text-slate-400"
+                    }`}
+                  >
+                    {pendingImport.fileName}
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className={`mt-4 rounded-xl p-3 text-[11px] space-y-1.5 ${
+                  theme === "light"
+                    ? "bg-slate-50 border border-slate-200 text-slate-600"
+                    : "bg-slate-800/60 border border-slate-700 text-slate-300"
+                }`}
+              >
+                <div className="flex justify-between gap-3">
+                  <span>项目名称</span>
+                  <span className="font-bold truncate max-w-[60%] text-right">
+                    {pendingImport.parsed.project.name}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>画布列</span>
+                  <span className="font-bold">
+                    {pendingImport.parsed.meta.workspaceCount}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>生成记录</span>
+                  <span className="font-bold">
+                    {pendingImport.parsed.meta.generationCount}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>图片资源</span>
+                  <span className="font-bold">
+                    {pendingImport.parsed.meta.assetCount}
+                  </span>
+                </div>
+                {pendingImport.parsed.meta.exportedAt && (
+                  <div className="flex justify-between gap-3">
+                    <span>导出时间</span>
+                    <span className="font-medium truncate max-w-[60%] text-right">
+                      {new Date(
+                        pendingImport.parsed.meta.exportedAt,
+                      ).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {importConflictProject ? (
+                <p
+                  className={`mt-3 text-[11px] leading-relaxed ${
+                    theme === "light" ? "text-amber-600" : "text-amber-400"
+                  }`}
+                >
+                  已存在同名的项目标识「{importConflictProject.name}」。
+                  「覆盖」会替换该项目现有的全部数据，「导入为副本」会保留原项目并新增一份。
+                </p>
+              ) : (
+                <p
+                  className={`mt-3 text-[11px] leading-relaxed ${
+                    theme === "light" ? "text-slate-500" : "text-slate-400"
+                  }`}
+                >
+                  导入后会新增该项目，并自动切换为当前项目。
+                </p>
+              )}
+
+              <div className="mt-4 flex flex-col gap-2">
+                {importConflictProject && (
+                  <button
+                    onClick={() => void handleConfirmImport("overwrite")}
+                    disabled={!!transferBusy}
+                    className="w-full px-3 py-2 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    覆盖现有项目
+                  </button>
+                )}
+                <button
+                  onClick={() => void handleConfirmImport("copy")}
+                  disabled={!!transferBusy}
+                  className="w-full px-3 py-2 rounded-lg text-xs font-bold bg-sky-600 hover:bg-sky-700 text-white transition-colors shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {importConflictProject ? "导入为副本（保留原项目）" : "导入该项目"}
+                </button>
+                <button
+                  onClick={() => setPendingImport(null)}
+                  disabled={!!transferBusy}
+                  className={`w-full px-3 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    theme === "light"
+                      ? "bg-slate-100 hover:bg-slate-200 text-slate-600"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  取消
+                </button>
+                {transferBusy && (
+                  <p
+                    className={`text-[10px] text-center ${
+                      theme === "light" ? "text-slate-500" : "text-slate-400"
+                    }`}
+                  >
+                    {transferBusy}
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {isDevEnvironment && <PerformanceMonitor />}
     </div>
   );

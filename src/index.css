@@ -476,3 +476,32 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   阶段一：渲染隔离（P0）。
+
+   让离屏的列与卡片跳过样式重算、布局与绘制，只保留一个接近真实尺寸的占位。
+   - content-visibility: auto  → 离屏时跳过整棵子树，进入视口前自动恢复
+   - contain: layout paint style → 把失效范围限制在元素内部
+   - contain-intrinsic-size  → 跳过期间的占位尺寸；`auto` 关键字会在首次
+     真实布局后改写为实测值，因此只影响“从未布局过”的那一帧
+
+   标记类挂在 <html> 上（zz-iso-col / zz-iso-card），由 src/utils/renderIsolation.ts
+   启动；运行期可用 window.__renderIsolation 单独关闭列或卡片隔离做 A/B 对照。
+
+   注意：列容器与卡片容器在样式里已经是 overflow-hidden + relative，paint 与 layout
+   containment 不会改变它们的可见裁剪与外层布局；固定定位的弹层都经由 Portal 挂在
+   body 下，不在被隔离的子树内。
+--------------------------------------------------------------------------- */
+html.zz-iso-col [data-iso-target="column"] {
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: var(--zz-iso-col-size, auto 460px auto 900px);
+}
+
+html.zz-iso-card [data-iso-target="card"] {
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: auto
+    var(--zz-card-h, var(--zz-iso-card-h, 400px));
+}
+

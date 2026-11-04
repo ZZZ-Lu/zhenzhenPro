@@ -484,8 +484,9 @@ const TrackColumnComponent: React.FC<TrackColumnProps> = ({
         setDraggedTrackId(null);
         setDraggableId(null);
       }}
-      id={`track-container-${ws.id}`}
+id={`track-container-${ws.id}`}
       data-track-container={ws.id}
+      data-iso-target="column"
       data-is-generating={ws.generations.some((g) => g.status === "generating")}
       className={`w-[88vw] min-w-[325px] h-full min-h-0 flex-shrink-0 flex flex-col border transition-colors duration-200 rounded-2xl overflow-hidden shadow-xl relative ${
         theme === "light"

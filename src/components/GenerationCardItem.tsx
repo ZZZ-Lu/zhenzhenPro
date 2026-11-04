@@ -19,8 +19,12 @@ import { GenerationItem, GeneratedImage } from "../types";
 import { SmartImage } from "./SmartImage";
 import { LazyImageWrapper } from "./LazyImageWrapper";
 import { getAspectRatioParams } from "../App";
-import { observeIntersection } from "../utils/intersectionPool";
+
 import { getCachedBlobUrl } from "../utils/blobUrlCache";
+import {
+  cardHeightStyle,
+  estimateCardHeight,
+} from "../utils/renderIsolation";
 
 const formatDuration = (totalSeconds: number) => {
   const m = Math.floor(totalSeconds / 60);
@@ -183,59 +187,8 @@ export const GenerationCardItem = React.memo(
     setDragOverImageId,
     setDraggedImageItem,
   }: GenerationCardItemProps) => {
-    const [isVisible, setIsVisible] = useState(true);
+// 卡片不再做可见性裁剪：一律渲染完整内容。
     const containerRef = useRef<HTMLDivElement>(null);
-    const measuredHeightRef = useRef<number>(0);
-    const isGenerating = gen.status === "generating";
-
-    useEffect(() => {
-      if (isGenerating) {
-        setIsVisible(true);
-        return;
-      }
-
-      const el = containerRef.current;
-      if (!el) return;
-
-      return observeIntersection(
-        el,
-        (intersecting) => {
-          if (!intersecting && el.clientHeight > 50) {
-            measuredHeightRef.current = el.clientHeight;
-          }
-          setIsVisible(intersecting);
-        },
-        { rootMargin: "1000px 2400px 1000px 2400px" }
-      );
-    }, [isGenerating]);
-
-    useEffect(() => {
-      if (containerRef.current && containerRef.current.clientHeight > 50) {
-        measuredHeightRef.current = containerRef.current.clientHeight;
-      }
-    });
-
-    if (!isVisible && !isGenerating) {
-      const fallbackHeight = measuredHeightRef.current || 380;
-      return (
-        <div
-          ref={containerRef}
-          id={`gen-card-${gen.id}`}
-          data-gen-id={gen.id}
-          data-virtual-placeholder="true"
-          className={`w-full rounded-2xl border ${
-            theme === "light"
-              ? "border-slate-200/80 bg-slate-100/60"
-              : "border-slate-800/30 bg-slate-950/20"
-          }`}
-          style={{
-            height: `${fallbackHeight}px`,
-            contentVisibility: "auto",
-            containIntrinsicSize: `auto ${fallbackHeight}px`,
-          }}
-        />
-      );
-    }
 
     const imageList: GeneratedImage[] = [];
     if (gen.status === "success" && gen.result?.data) {
@@ -255,19 +208,25 @@ export const GenerationCardItem = React.memo(
       <motion.div
         ref={containerRef}
         key={gen.id}
-        id={`gen-card-${gen.id}`}
+id={`gen-card-${gen.id}`}
         data-gen-id={gen.id}
+        data-iso-target="card"
         data-gen-status={gen.status}
         data-generating-card={gen.status === "generating"}
         initial={{ opacity: 0, y: 15, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.96, y: -10 }}
+exit={{ opacity: 0, scale: 0.96, y: -10 }}
         transition={{ duration: 0.18 }}
-        className="bg-slate-950 hover:bg-slate-950/95 border border-slate-800 hover:border-slate-700/60 rounded-2xl p-0 flex flex-col relative group transition-colors duration-250 shadow-inner overflow-hidden"
-        style={{
-          contentVisibility: "auto",
-          containIntrinsicSize: `auto ${measuredHeightRef.current || 380}px`,
-        }}
+        // 跳过期间的占位高度（按列宽 × 图片比例估算），见 renderIsolation.ts。
+        style={cardHeightStyle(
+          estimateCardHeight({
+            columnWidth,
+            aspectRatio: getAspectRatioParams(gen.size).style
+              .aspectRatio as string,
+            imageCount: imageList.length,
+          }),
+        ) as React.CSSProperties}
+className="bg-slate-950 hover:bg-slate-950/95 border border-slate-800 hover:border-slate-700/60 rounded-2xl p-0 flex flex-col relative group transition-colors duration-250 shadow-inner overflow-hidden"
       >
         {/* Header of Card */}
         <div className="flex items-center justify-between gap-1.5 text-xs p-4 pb-3">

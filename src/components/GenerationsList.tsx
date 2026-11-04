@@ -20,6 +20,10 @@ import { SmartImage } from "./SmartImage";
 import { LazyImageWrapper } from "./LazyImageWrapper";
 import { getAspectRatioParams } from "../App";
 import { getCachedBlobUrl } from "../utils/blobUrlCache";
+import {
+  cardHeightStyle,
+  estimateCardHeight,
+} from "../utils/renderIsolation";
 
 const formatDuration = (totalSeconds: number) => {
   const m = Math.floor(totalSeconds / 60);
@@ -245,22 +249,26 @@ export const GenerationsList = React.memo(
           return (
             <motion.div
               key={gen.id}
-              id={`gen-card-${gen.id}`}
+id={`gen-card-${gen.id}`}
               data-gen-id={gen.id}
+              data-iso-target="card"
               data-gen-status={gen.status}
               data-generating-card={gen.status === "generating"}
               initial={{ opacity: 0, y: 15, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96, y: -10 }}
               transition={{ duration: 0.18 }}
-              style={{
-                // Native windowing: offscreen cards are not rendered/painted.
-                // "auto <size>" lets the browser remember the real measured size
-                // after the first render instead of forcing a fixed 380x320
-                // estimate, which previously made the scrollbar/scrollTop jitter.
-                contentVisibility: "auto",
-                containIntrinsicSize: "auto 400px",
-              }}
+              // 跳过期间的占位高度：按「列宽 × 图片比例」估算，让从未渲染过的卡片
+              // 也以接近真实的高度占位（真实布局过之后由 contain-intrinsic-size 的
+              // auto 关键字改用实测值）。见 src/utils/renderIsolation.ts。
+              style={cardHeightStyle(
+                estimateCardHeight({
+                  columnWidth,
+                  aspectRatio: getAspectRatioParams(gen.size).style
+                    .aspectRatio as string,
+                  imageCount: imageList.length,
+                }),
+              ) as React.CSSProperties}
               className="bg-slate-950 hover:bg-slate-950/95 border border-slate-800 hover:border-slate-700/60 rounded-2xl p-0 flex flex-col relative group transition-colors duration-250 shadow-inner overflow-hidden"
             >
               {/* Header of Card */}
