@@ -1412,9 +1412,12 @@ if (isActive) {
     };
   }, []);
 
-  // Sync canvas scroll on lightbox view state: defaults to false during image full-screen viewing
+// 全屏看图时是否让下方画板同步滚动定位到对应卡片（设置面板里可切换，值写入 IndexedDB
+  // 的 img_studio_sync_canvas_scroll）。默认取 true：此前默认 false，一旦这条设置键丢失
+  // 或被重置（清理数据、DB 重建、换浏览器配置等），功能就会静默失效，表现正是「点缩略图，
+  // 画板不再自动滚到对应图片位置」。用户显式关闭时会写入 false，仍以库里的值为准。
   const [syncCanvasScrollOnView, setSyncCanvasScrollOnView] =
-    useState<boolean>(false);
+    useState<boolean>(true);
 
   const toggleSyncCanvasScroll = (val: boolean) => {
     setSyncCanvasScrollOnView(val);
